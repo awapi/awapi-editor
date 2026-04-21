@@ -16,6 +16,7 @@ export const electronAPI = {
   onCloseTab: (callback: () => void) => ipcRenderer.on('menu:closeTab', () => callback()),
   onFind: (callback: () => void) => ipcRenderer.on('menu:find', () => callback()),
   onReplace: (callback: () => void) => ipcRenderer.on('menu:replace', () => callback()),
+  onFormat: (callback: () => void) => ipcRenderer.on('menu:format', () => callback()),
   onThemeChange: (callback: (theme: string) => void) => ipcRenderer.on('menu:themeChange', (_, theme) => callback(theme)),
   
   // Cleanup listeners
@@ -27,6 +28,7 @@ export const electronAPI = {
     ipcRenderer.removeAllListeners('menu:closeTab');
     ipcRenderer.removeAllListeners('menu:find');
     ipcRenderer.removeAllListeners('menu:replace');
+    ipcRenderer.removeAllListeners('menu:format');
     ipcRenderer.removeAllListeners('menu:themeChange');
   }
 };

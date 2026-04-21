@@ -172,6 +172,12 @@ const App: React.FC = () => {
         }
       });
 
+      w.electronAPI.onFormat(() => {
+        if (editorRef.current) {
+          editorRef.current.getAction('editor.action.formatDocument').run();
+        }
+      });
+
       // Handle global drag and drop
       // Use capture:true so events are intercepted BEFORE Monaco can stopPropagation()
       const preventDefault = (e: DragEvent) => {
@@ -325,8 +331,14 @@ const App: React.FC = () => {
         >
           +
         </div>
+        {/* Empty space – double-click to open a new tab */}
+        <div
+          data-testid="tab-bar-spacer"
+          style={{ flexGrow: 1 }}
+          onDoubleClick={addNewTab}
+        />
         {/* Word Wrap Toggle */}
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', paddingRight: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', paddingRight: '8px' }}>
           <button
             data-testid="word-wrap-toggle"
             onClick={() => setWordWrap(prev => !prev)}

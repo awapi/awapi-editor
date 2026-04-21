@@ -32,6 +32,13 @@ typecheck:
 build:
     npm run build
 
+# Package the app for local installation (macOS .dmg, no GitHub publish)
+package:
+    npm run package
+    open release/AwapiEditor-*.dmg
+    @echo "Drag AwapiEditor to /Applications in the window that just opened."
+    @echo "Then run: xattr -cr /Applications/AwapiEditor.app"
+
 # Clear caches and build outputs
 clean:
     rm -rf dist node_modules

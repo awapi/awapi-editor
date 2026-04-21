@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import App from './App';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ThemeProvider } from './theme/ThemeContext';
 
 describe('Editor Core Tests', () => {
@@ -13,6 +13,7 @@ describe('Editor Core Tests', () => {
       onCloseTab: vi.fn(),
       onFind: vi.fn(),
       onReplace: vi.fn(),
+      onFormat: vi.fn(),
       onThemeChange: vi.fn(),
       removeListeners: vi.fn(),
       readFile: vi.fn().mockResolvedValue({ filePath: '/mock/path/file.txt', content: 'mock content' }),
@@ -59,5 +60,28 @@ describe('Editor Core Tests', () => {
     expect(btn.title).toBe('Enable Word Wrap');
     fireEvent.click(btn);
     expect(btn.title).toBe('Disable Word Wrap');
+  });
+
+  it('should register the onFormat listener on mount', () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    );
+    expect((window as any).electronAPI.onFormat).toHaveBeenCalledTimes(1);
+  });
+
+  it('should open a new tab when double-clicking the empty tab bar space', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    );
+    const spacer = screen.getByTestId('tab-bar-spacer');
+    // Wait for the default "Untitled" tab created on startup
+    await waitFor(() => screen.getAllByText('Untitled'));
+    const tabsBefore = screen.getAllByText('Untitled').length;
+    fireEvent.dblClick(spacer);
+    await waitFor(() => expect(screen.getAllByText('Untitled').length).toBe(tabsBefore + 1));
   });
 });

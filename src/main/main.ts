@@ -112,6 +112,8 @@ ipcMain.handle('dialog:saveFile', async (_, filePath: string, content: string) =
 // Setup primitive app menu (can be fleshed out later)
 import { Menu } from 'electron';
 
+let zoomLevel = 0;
+
 const isMac = process.platform === 'darwin';
 
 const template: Electron.MenuItemConstructorOptions[] = [
@@ -159,11 +161,17 @@ const template: Electron.MenuItemConstructorOptions[] = [
       { type: 'separator' },
       { label: 'Find...', accelerator: 'CmdOrCtrl+F', click: () => mainWindow?.webContents.send('menu:find') },
       { label: 'Replace...', accelerator: 'CmdOrCtrl+H', click: () => mainWindow?.webContents.send('menu:replace') },
+      { type: 'separator' },
+      { label: 'Format Document', accelerator: 'Shift+Alt+F', click: () => mainWindow?.webContents.send('menu:format') },
     ]
   },
   {
     label: 'View',
     submenu: [
+      { label: 'Zoom In',    accelerator: 'CmdOrCtrl+=', click: () => { zoomLevel = Math.min(zoomLevel + 1, 9);  mainWindow?.webContents.setZoomLevel(zoomLevel); } },
+      { label: 'Zoom Out',   accelerator: 'CmdOrCtrl+-', click: () => { zoomLevel = Math.max(zoomLevel - 1, -9); mainWindow?.webContents.setZoomLevel(zoomLevel); } },
+      { label: 'Reset Zoom', accelerator: 'CmdOrCtrl+0', click: () => { zoomLevel = 0; mainWindow?.webContents.setZoomLevel(0); } },
+      { type: 'separator' },
       { role: 'reload' },
       { role: 'toggleDevTools' },
     ]

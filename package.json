@@ -1,6 +1,6 @@
 {
   "name": "awapi-editor",
-  "version": "1.0.0",
+  "version": "0.2.1",
   "description": "",
   "main": "dist/main/main.js",
   "scripts": {
@@ -15,7 +15,9 @@
   },
   "build": {
     "appId": "com.awapi.awapieditor",
-    "publish": ["github"],
+    "publish": [
+      "github"
+    ],
     "productName": "AwapiEditor",
     "directories": {
       "output": "release"

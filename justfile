@@ -36,3 +36,10 @@ build:
 clean:
     rm -rf dist node_modules
     npm cache clean --force
+
+# Create a new version tag (e.g. 1.0.0) and push to trigger the GitHub Actions release
+release version:
+    @echo "Creating and pushing release tag v{{version}}..."
+    git tag v{{version}}
+    git push origin v{{version}}
+

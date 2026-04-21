@@ -30,6 +30,11 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Set the macOS Dock icon explicitly in dev (BrowserWindow.icon doesn't affect the Dock)
+  if (process.platform === 'darwin' && isDev && app.dock) {
+    app.dock.setIcon(join(__dirname, '../../build/icon.png'));
+  }
+
   createWindow();
 
   app.on('activate', () => {

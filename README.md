@@ -1,5 +1,8 @@
 # AwapiEditor
 
+[![CI](https://github.com/awapi/awapi-editor/actions/workflows/ci.yml/badge.svg)](https://github.com/awapi/awapi-editor/actions/workflows/ci.yml)
+[![Release Builds](https://github.com/awapi/awapi-editor/actions/workflows/release.yml/badge.svg)](https://github.com/awapi/awapi-editor/actions/workflows/release.yml)
+
 AwapiEditor is a fast, lightweight, universal text editor built specifically for cross-platform usage across macOS, Windows, and Linux.
 
 ## ✨ Features
@@ -10,7 +13,35 @@ AwapiEditor is a fast, lightweight, universal text editor built specifically for
 - **Lightning Fast Build Tools:** Powered by Vite (`vite-plugin-electron`, `vite-plugin-electron-renderer`) for an unmatched developer experience and fast Hot Module Replacement (HMR).
 - **Secure architecture:** Strict separation between the Main, Preload, and Renderer processes.
 
-## 🚀 Getting Started
+## � Installation
+
+### macOS
+
+1. Download the latest `.dmg` from the [Releases](https://github.com/awapi/awapi-editor/releases) page.
+2. Open the `.dmg` and drag **AwapiEditor** into your `/Applications` folder.
+3. Because the app is currently **not code-signed**, macOS Gatekeeper will block it on first launch. Run this once in Terminal to clear the quarantine flag:
+   ```bash
+   xattr -cr "/Applications/AwapiEditor.app"
+   ```
+4. Launch AwapiEditor normally from Launchpad or Spotlight.
+
+### Windows
+
+1. Download the latest `.exe` installer from the [Releases](https://github.com/awapi/awapi-editor/releases) page.
+2. Run the installer and follow the on-screen steps.
+
+### Linux
+
+1. Download the latest `.AppImage` from the [Releases](https://github.com/awapi/awapi-editor/releases) page.
+2. Make it executable and run it:
+   ```bash
+   chmod +x AwapiEditor-*.AppImage
+   ./AwapiEditor-*.AppImage
+   ```
+
+---
+
+## �🚀 Getting Started
 
 ### Prerequisites
 

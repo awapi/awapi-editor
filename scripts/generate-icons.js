@@ -1,5 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const { execSync } = require('child_process');
 const sharp = require('sharp');
 const png2icons = require('png2icons');
 
@@ -49,10 +51,38 @@ async function buildIcons() {
   fs.writeFileSync(pngPath, pngBuffer);
   console.log('Created PNG icon (1024x1024).');
 
-  const icnsBuffer = png2icons.createICNS(pngBuffer, png2icons.BICUBIC2, 0);
-  if (icnsBuffer) {
-    fs.writeFileSync(icnsPath, icnsBuffer);
-    console.log('Created ICNS icon (macOS).');
+  if (os.platform() === 'darwin') {
+    // Use iconutil for a proper multi-resolution .icns (required for macOS app bundles)
+    const iconsetDir = path.join(iconDir, 'icon.iconset');
+    if (!fs.existsSync(iconsetDir)) fs.mkdirSync(iconsetDir);
+    const iconsetSizes = [
+      { logical: 16,  scale: 1 },
+      { logical: 16,  scale: 2 },
+      { logical: 32,  scale: 1 },
+      { logical: 32,  scale: 2 },
+      { logical: 128, scale: 1 },
+      { logical: 128, scale: 2 },
+      { logical: 256, scale: 1 },
+      { logical: 256, scale: 2 },
+      { logical: 512, scale: 1 },
+      { logical: 512, scale: 2 },
+    ];
+    for (const { logical, scale } of iconsetSizes) {
+      const actual = logical * scale;
+      const filename = scale === 1
+        ? `icon_${logical}x${logical}.png`
+        : `icon_${logical}x${logical}@2x.png`;
+      await sharp(pngBuffer).resize(actual, actual).png().toFile(path.join(iconsetDir, filename));
+    }
+    execSync(`iconutil -c icns "${iconsetDir}" -o "${icnsPath}"`);
+    fs.rmSync(iconsetDir, { recursive: true, force: true });
+    console.log('Created ICNS icon via iconutil (macOS, multi-resolution).');
+  } else {
+    const icnsBuffer = png2icons.createICNS(pngBuffer, png2icons.BICUBIC2, 0);
+    if (icnsBuffer) {
+      fs.writeFileSync(icnsPath, icnsBuffer);
+      console.log('Created ICNS icon via png2icons (non-macOS fallback).');
+    }
   }
 
   const icoBuffer = png2icons.createICO(pngBuffer, png2icons.BICUBIC2, 0, false, true);

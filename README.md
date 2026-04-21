@@ -98,7 +98,7 @@ just build
 
 To automatically trigger a version tag and GitHub Actions build:
 ```bash
-just release 1.0.0
+just release 0.2.0
 ```
 
 ## 🤝 Contributing

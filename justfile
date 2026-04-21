@@ -39,6 +39,11 @@ clean:
 
 # Create a new version tag (e.g. 1.0.0) and push to trigger the GitHub Actions release
 release version:
+    @echo "Bumping package.json to {{version}}..."
+    npm version {{version}} --no-git-tag-version
+    git add package.json package-lock.json
+    git commit -m "chore: release v{{version}}"
+    git push
     @echo "Creating and pushing release tag v{{version}}..."
     git tag v{{version}}
     git push origin v{{version}}

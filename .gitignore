@@ -12,7 +12,13 @@ node_modules/
 dist/
 dist-electron/
 out/
+# Build output (but keep icon assets used by electron-builder)
 build/
+!build/icon.icns
+!build/icon.ico
+!build/icon.png
+!build/icon.svg
+!build/icon-*.png
 release/
 
 # Testing

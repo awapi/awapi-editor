@@ -16,7 +16,7 @@
   "build": {
     "appId": "com.awapi.awapieditor",
     "publish": ["github"],
-    "productName": "Awapi Editor",
+    "productName": "AwapiEditor",
     "directories": {
       "output": "release"
     },

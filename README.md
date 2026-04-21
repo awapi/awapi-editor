@@ -1,6 +1,6 @@
-# Awapi Editor
+# AwapiEditor
 
-Awapi Editor is a fast, lightweight, universal text editor built specifically for cross-platform usage across macOS, Windows, and Linux.
+AwapiEditor is a fast, lightweight, universal text editor built specifically for cross-platform usage across macOS, Windows, and Linux.
 
 ## ✨ Features
 

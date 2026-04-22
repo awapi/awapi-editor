@@ -157,7 +157,7 @@ describe('Editor Core Tests', () => {
       (window as any).electronAPI.saveFileDialog = vi.fn().mockResolvedValue('/tmp/dirty.txt');
       await renderWithDirtyTab();
       fireEvent.click(getCloseButton());
-      await waitFor(() => expect((window as any).electronAPI.saveFileDialog).toHaveBeenCalledWith('/tmp/dirty.txt', 'edited content'));
+      await waitFor(() => expect((window as any).electronAPI.saveFileDialog).toHaveBeenCalledWith('/tmp/dirty.txt', 'edited content', 'LF'));
       await waitFor(() => expect(screen.queryByText(/dirty\.txt/)).toBeNull());
     });
 

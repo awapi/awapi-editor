@@ -4,6 +4,8 @@ import { X } from 'lucide-react';
 import { useTheme } from './theme/ThemeContext';
 import { useSessionPersistence, loadSession, SessionTab } from './useSessionPersistence';
 import LanguageSelector from './LanguageSelector';
+import LineEndingSelector from './LineEndingSelector';
+import type { EolKind } from './lineEndings';
 import { inferLanguageFromFilename } from './languages';
 
 interface Tab {
@@ -15,6 +17,8 @@ interface Tab {
   /** User-selected Monaco language id. When undefined, the language is
    *  inferred from the filename extension (or "plaintext" if none). */
   language?: string;
+  /** Line-ending sequence used when saving the tab's content. Defaults to LF. */
+  eol?: EolKind;
 }
 
 const App: React.FC = () => {
@@ -31,7 +35,8 @@ const App: React.FC = () => {
       title: 'Untitled',
       filePath: null,
       content: '',
-      isDirty: false
+      isDirty: false,
+      eol: 'LF'
     };
     setTabs(prev => [...prev, newTab]);
     setActiveTabId(id);
@@ -74,12 +79,12 @@ const App: React.FC = () => {
                   if (saved.filePath && !saved.isDirty) {
                     try {
                       const fileData = await w.electronAPI.readFile(saved.filePath);
-                      if (fileData) return { ...saved, content: fileData.content };
+                      if (fileData) return { ...saved, content: fileData.content, eol: fileData.eol };
                     } catch {
                       // File no longer exists – fall through and use stored content
                     }
                   }
-                  return { ...saved };
+                  return { ...saved, eol: saved.eol ?? 'LF' };
                 })
               );
               setTabs(restoredTabs);
@@ -126,7 +131,8 @@ const App: React.FC = () => {
               title: fileName,
               filePath: result.filePath,
               content: result.content,
-              isDirty: false
+              isDirty: false,
+              eol: result.eol
             }]);
             setActiveTabId(id);
           }
@@ -140,7 +146,11 @@ const App: React.FC = () => {
         if(!currentTab) return;
 
         try {
-          const savedPath = await w.electronAPI.saveFileDialog(currentTab.filePath, currentTab.content);
+          const savedPath = await w.electronAPI.saveFileDialog(
+            currentTab.filePath,
+            currentTab.content,
+            currentTab.eol ?? 'LF'
+          );
           if (savedPath) {
             const fileName = savedPath.split(/[\\/]/).pop() || savedPath;
             setTabs(prev => prev.map(t => 
@@ -159,7 +169,11 @@ const App: React.FC = () => {
         if(!currentTab) return;
 
         try {
-          const savedPath = await w.electronAPI.saveFileDialog(null, currentTab.content);
+          const savedPath = await w.electronAPI.saveFileDialog(
+            null,
+            currentTab.content,
+            currentTab.eol ?? 'LF'
+          );
           if (savedPath) {
             const fileName = savedPath.split(/[\\/]/).pop() || savedPath;
             setTabs(prev => prev.map(t => 
@@ -224,7 +238,8 @@ const App: React.FC = () => {
                 title: fileName,
                 filePath: result.filePath,
                 content: result.content,
-                isDirty: false
+                isDirty: false,
+                eol: result.eol
               }]);
               setActiveTabId(id);
             }
@@ -283,7 +298,7 @@ const App: React.FC = () => {
       if (choice === 'save') {
         if (!w.electronAPI?.saveFileDialog) return;
         try {
-          const savedPath = await w.electronAPI.saveFileDialog(tab.filePath, tab.content);
+          const savedPath = await w.electronAPI.saveFileDialog(tab.filePath, tab.content, tab.eol ?? 'LF');
           if (!savedPath) return; // Save dialog cancelled – abort close
         } catch (err) {
           console.error('Error saving file during close', err);
@@ -309,6 +324,11 @@ const App: React.FC = () => {
   const handleLanguageChange = (languageId: string) => {
     if (!activeTabId) return;
     setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, language: languageId } : t));
+  };
+
+  const handleEolChange = (eol: EolKind) => {
+    if (!activeTabId) return;
+    setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, eol, isDirty: true } : t));
   };
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
@@ -337,75 +357,132 @@ const App: React.FC = () => {
     });
   };
 
+  // Horizontally scroll the tab strip with the mouse wheel so users without a
+  // trackpad can reach overflowed tabs.
+  const handleTabStripWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    // Only translate vertical wheel motion into horizontal scroll. If the user
+    // is already scrolling horizontally (shift+wheel or a trackpad), let the
+    // browser handle it natively.
+    if (e.deltaY !== 0 && e.deltaX === 0) {
+      e.currentTarget.scrollLeft += e.deltaY;
+    }
+  };
+
+  // Keep the active tab visible when it changes or when tabs are added/removed.
+  const tabStripRef = React.useRef<HTMLDivElement>(null);
+  const activeTabElRef = React.useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // jsdom (used in tests) doesn't implement scrollIntoView; guard it so the
+    // renderer doesn't crash during unit tests.
+    const el = activeTabElRef.current;
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    }
+  }, [activeTabId, tabs.length]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: colors.background, color: colors.foreground }}>
-      {/* Tab Bar */}
-      <div style={{ display: 'flex', backgroundColor: colors.tabBackground, overflowX: 'auto', flexShrink: 0 }}>
-        {tabs.map((tab, index) => (
-          <div
-            key={tab.id}
-            draggable
-            onDragStart={(e) => handleDragStart(e, index)}
-            onDragOver={handleDragOver}
-            onDrop={(e) => handleDrop(e, index)}
-            onClick={() => setActiveTabId(tab.id)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              padding: '8px 16px',
-              backgroundColor: activeTabId === tab.id ? colors.tabActiveBackground : colors.tabBackground,
-              borderTop: activeTabId === tab.id ? `2px solid ${colors.tabBorder}` : '2px solid transparent',
-              cursor: 'pointer',
-              borderRight: `1px solid ${colors.tabHover}`,
-              minWidth: '120px',
-              userSelect: 'none',
-              color: tab.isDirty ? '#e2c08d' : colors.foreground
-            }}
-          >
-            <span style={{ flexGrow: 1, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
-              {tab.title} {tab.isDirty && '*'}
-            </span>
-            <X 
-              size={14} 
-              style={{ marginLeft: 8, opacity: 0.6 }} 
-              onClick={(e) => closeTab(e, tab.id)}
-              onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
-              onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.6')}
-            />
-          </div>
-        ))}
-        {/* Add Tab Button */}
-        <div 
-          onClick={addNewTab}
-          style={{ padding: '8px', cursor: 'pointer', color: colors.foreground, display: 'flex', alignItems: 'center' }}
-        >
-          +
-        </div>
-        {/* Empty space – double-click to open a new tab */}
+      {/* Tab Bar: outer row never scrolls so the right-side action group stays pinned. */}
+      <div style={{ display: 'flex', backgroundColor: colors.tabBackground, flexShrink: 0 }}>
+        {/* Scrollable tab strip. minWidth:0 is required so this flex child can
+            shrink below its content width instead of pushing siblings off-screen. */}
         <div
-          data-testid="tab-bar-spacer"
-          style={{ flexGrow: 1 }}
-          onDoubleClick={addNewTab}
-        />
-        {/* Word Wrap Toggle */}
-        <div style={{ display: 'flex', alignItems: 'center', paddingRight: '8px' }}>
+          ref={tabStripRef}
+          onWheel={handleTabStripWheel}
+          style={{ display: 'flex', flex: '1 1 auto', minWidth: 0, overflowX: 'auto' }}
+        >
+          {tabs.map((tab, index) => (
+            <div
+              key={tab.id}
+              ref={el => {
+                if (tab.id === activeTabId) activeTabElRef.current = el;
+              }}
+              draggable
+              onDragStart={(e) => handleDragStart(e, index)}
+              onDragOver={handleDragOver}
+              onDrop={(e) => handleDrop(e, index)}
+              onClick={() => setActiveTabId(tab.id)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                padding: '8px 16px',
+                backgroundColor: activeTabId === tab.id ? colors.tabActiveBackground : colors.tabBackground,
+                borderTop: activeTabId === tab.id ? `2px solid ${colors.tabBorder}` : '2px solid transparent',
+                cursor: 'pointer',
+                borderRight: `1px solid ${colors.tabHover}`,
+                minWidth: '120px',
+                flexShrink: 0,
+                userSelect: 'none',
+                color: tab.isDirty ? '#e2c08d' : colors.foreground
+              }}
+            >
+              <span style={{ flexGrow: 1, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                {tab.title} {tab.isDirty && '*'}
+              </span>
+              <X
+                size={14}
+                style={{ marginLeft: 8, opacity: 0.6, flexShrink: 0 }}
+                onClick={(e) => closeTab(e, tab.id)}
+                onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.6')}
+              />
+            </div>
+          ))}
+          {/* Add Tab Button */}
+          <div
+            onClick={addNewTab}
+            style={{ padding: '8px', cursor: 'pointer', color: colors.foreground, display: 'flex', alignItems: 'center', flexShrink: 0 }}
+          >
+            +
+          </div>
+          {/* Empty space – double-click to open a new tab */}
+          <div
+            data-testid="tab-bar-spacer"
+            style={{ flexGrow: 1, minWidth: '24px' }}
+            onDoubleClick={addNewTab}
+          />
+        </div>
+        {/* Action group: pinned to the right, never scrolls with tabs. */}
+        <div style={{ display: 'flex', alignItems: 'center', paddingRight: '8px', flexShrink: 0 }}>
           <button
             data-testid="word-wrap-toggle"
+            aria-label={wordWrap ? 'Disable Word Wrap' : 'Enable Word Wrap'}
+            aria-pressed={wordWrap}
             onClick={() => setWordWrap(prev => !prev)}
             title={wordWrap ? 'Disable Word Wrap' : 'Enable Word Wrap'}
             style={{
-              padding: '2px 10px',
-              fontSize: '12px',
+              width: '28px',
+              height: '24px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
               cursor: 'pointer',
               borderRadius: '4px',
               border: `1px solid ${colors.tabHover}`,
               backgroundColor: wordWrap ? colors.tabActiveBackground : colors.tabBackground,
-              color: wordWrap ? colors.foreground : colors.foreground,
+              color: colors.foreground,
               opacity: wordWrap ? 1 : 0.55,
-              whiteSpace: 'nowrap',
             }}
           >
-            Word Wrap
+            {/* Word wrap icon: three lines with a curved arrow indicating wrap on the second line */}
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.25"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <line x1="2" y1="3.5" x2="14" y2="3.5" />
+              <path d="M2 8h9.5a2 2 0 0 1 0 4H8" />
+              <polyline points="9.5,10 8,12 9.5,14" />
+              <line x1="2" y1="12.5" x2="5" y2="12.5" />
+            </svg>
           </button>
         </div>
       </div>
@@ -453,6 +530,19 @@ const App: React.FC = () => {
           flexShrink: 0,
         }}
       >
+        {activeTab && (
+          <LineEndingSelector
+            eol={activeTab.eol ?? 'LF'}
+            onChange={handleEolChange}
+            colors={{
+              background: colors.background,
+              foreground: colors.foreground,
+              tabBackground: colors.tabBackground,
+              tabActiveBackground: colors.tabActiveBackground,
+              tabHover: colors.tabHover,
+            }}
+          />
+        )}
         {activeTab && (
           <LanguageSelector
             languageId={effectiveLanguage}

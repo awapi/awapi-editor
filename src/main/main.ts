@@ -3,6 +3,25 @@ import { join } from 'path';
 import * as fs from 'fs';
 import { checkForUpdates } from './updater';
 
+/** Line-ending kinds supported by the editor. Mirrors renderer/src/lineEndings. */
+type EolKind = 'LF' | 'CRLF';
+
+/** Detect dominant EOL: CRLF if any \r\n present, else LF. */
+function detectEol(content: string): EolKind {
+  return content.includes('\r\n') ? 'CRLF' : 'LF';
+}
+
+/** Normalize any mixed line endings to `\n`. */
+function normalizeToLF(content: string): string {
+  return content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+/** Apply the requested EOL to LF-normalized content (idempotent for LF). */
+function applyEol(content: string, eol: EolKind): string {
+  const lf = normalizeToLF(content);
+  return eol === 'CRLF' ? lf.replace(/\n/g, '\r\n') : lf;
+}
+
 app.name = 'AwapiEditor';
 
 // Environment variable indicating if we are in dev mode
@@ -64,15 +83,18 @@ ipcMain.handle('dialog:openFile', async () => {
     properties: ['openFile'],
   });
   if (canceled || filePaths.length === 0) return null;
-  
-  const content = fs.readFileSync(filePaths[0], 'utf-8');
-  return { filePath: filePaths[0], content };
+
+  const raw = fs.readFileSync(filePaths[0], 'utf-8');
+  const eol = detectEol(raw);
+  // Normalize to LF so Monaco has consistent line endings in memory.
+  return { filePath: filePaths[0], content: normalizeToLF(raw), eol };
 });
 
 ipcMain.handle('file:read', async (_, filePath: string) => {
   try {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    return { filePath, content };
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const eol = detectEol(raw);
+    return { filePath, content: normalizeToLF(raw), eol };
   } catch (error) {
     console.error('Failed to read file:', error);
     return null;
@@ -121,10 +143,10 @@ ipcMain.handle('dialog:confirmUnsavedChanges', async (_, tabTitle: string) => {
   return 'cancel';
 });
 
-ipcMain.handle('dialog:saveFile', async (_, filePath: string, content: string) => {
+ipcMain.handle('dialog:saveFile', async (_, filePath: string, content: string, eol?: EolKind) => {
   if (!mainWindow) return null;
   let targetPath = filePath;
-  
+
   if (!targetPath) {
     const { canceled, filePath: newPath } = await dialog.showSaveDialog(mainWindow, {
       defaultPath: 'Untitled.txt',
@@ -133,7 +155,8 @@ ipcMain.handle('dialog:saveFile', async (_, filePath: string, content: string) =
     targetPath = newPath;
   }
 
-  fs.writeFileSync(targetPath, content, 'utf-8');
+  const normalized = applyEol(content, eol ?? 'LF');
+  fs.writeFileSync(targetPath, normalized, 'utf-8');
   return targetPath;
 });
 

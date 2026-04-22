@@ -1,0 +1,417 @@
+
+> awapi-editor@0.2.7 test
+> vitest run --run src/renderer/src/App.test.tsx
+
+`resolve.alias` contains an alias with `customResolver` option. This is deprecated and will be removed in Vite 9. Please use a custom plugin with a resolveId hook and `enforce: 'pre'` instead.
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.4 [39m[90m/Users/omeryesil/projects/github.awapi/awapi-editor/src/renderer[39m
+
+[90mstderr[2m | src/App.test.tsx[2m > [22m[2mEditor Core Tests[2m > [22m[2mshould render the word wrap toggle button
+[22m[39mAn update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+[90mstderr[2m | src/App.test.tsx[2m > [22m[2mEditor Core Tests[2m > [22m[2mshould toggle word wrap title on click
+[22m[39mAn update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+[90mstderr[2m | src/App.test.tsx[2m > [22m[2mEditor Core Tests[2m > [22m[2mshould register the onFormat listener on mount
+[22m[39mAn update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+An update to App inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+
+[90mstderr[2m | src/App.test.tsx[2m > [22m[2mEditor Core Tests[2m > [22m[2mshould open a new tab when double-clicking the empty tab bar space
+[22m[39mAn error occurred in the <App> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+[90mstderr[2m | src/App.test.tsx[2m > [22m[2mEditor Core Tests[2m > [22m[2mcloseTab unsaved confirmation[2m > [22m[2mcloses a clean tab without asking for confirmation
+[22m[39mAn error occurred in the <App> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+[90mstderr[2m | src/App.test.tsx[2m > [22m[2mEditor Core Tests[2m > [22m[2mcloseTab unsaved confirmation[2m > [22m[2mcancels close when user chooses Cancel on dirty tab
+[22m[39mAn error occurred in the <App> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+[90mstderr[2m | src/App.test.tsx[2m > [22m[2mEditor Core Tests[2m > [22m[2mcloseTab unsaved confirmation[2m > [22m[2mdiscards changes and closes when user chooses Don't Save
+[22m[39mAn error occurred in the <App> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+[90mstderr[2m | src/App.test.tsx[2m > [22m[2mEditor Core Tests[2m > [22m[2mcloseTab unsaved confirmation[2m > [22m[2msaves and closes when user chooses Save
+[22m[39mAn error occurred in the <App> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+[90mstderr[2m | src/App.test.tsx[2m > [22m[2mEditor Core Tests[2m > [22m[2mcloseTab unsaved confirmation[2m > [22m[2maborts close when save dialog is cancelled
+[22m[39mAn error occurred in the <App> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+
+ [31m❯[39m src/App.test.tsx [2m([22m[2m11 tests[22m[2m | [22m[31m6 failed[39m[2m)[22m[32m 134[2mms[22m[39m
+     [32m✓[39m should pass a basic sanity check[32m 1[2mms[22m[39m
+     [32m✓[39m should format unsaved file titles[32m 1[2mms[22m[39m
+     [32m✓[39m should render the word wrap toggle button[32m 42[2mms[22m[39m
+     [32m✓[39m should toggle word wrap title on click[32m 10[2mms[22m[39m
+     [32m✓[39m should register the onFormat listener on mount[32m 4[2mms[22m[39m
+[31m     [31m×[31m should open a new tab when double-clicking the empty tab bar space[39m[32m 34[2mms[22m[39m
+[31m       [31m×[31m closes a clean tab without asking for confirmation[39m[32m 7[2mms[22m[39m
+[31m       [31m×[31m cancels close when user chooses Cancel on dirty tab[39m[32m 9[2mms[22m[39m
+[31m       [31m×[31m discards changes and closes when user chooses Don't Save[39m[32m 8[2mms[22m[39m
+[31m       [31m×[31m saves and closes when user chooses Save[39m[32m 7[2mms[22m[39m
+[31m       [31m×[31m aborts close when save dialog is cancelled[39m[32m 8[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 6 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/App.test.tsx[2m > [22mEditor Core Tests[2m > [22mshould open a new tab when double-clicking the empty tab bar space
+[31m[1mTestingLibraryElementError[22m: Unable to find an element with the text: Untitled. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[31m
+  [36m<div />[31m
+[36m</body>[31m[39m
+[90m [2m❯[22m Object.getElementError ../../node_modules/@testing-library/dom/dist/config.js:[2m37:19[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m76:38[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m109:15[22m[39m
+[36m [2m❯[22m src/App.test.tsx:[2m83:31[22m[39m
+    [90m 81|[39m     [90m// Wait for the default "Untitled" tab created on startup[39m
+    [90m 82|[39m     [35mawait[39m [34mwaitFor[39m(() [33m=>[39m screen[33m.[39m[34mgetAllByText[39m([32m'Untitled'[39m))[33m;[39m
+    [90m 83|[39m     [35mconst[39m tabsBefore [33m=[39m screen[33m.[39m[34mgetAllByText[39m([32m'Untitled'[39m)[33m.[39mlength[33m;[39m
+    [90m   |[39m                               [31m^[39m
+    [90m 84|[39m     fireEvent[33m.[39m[34mdblClick[39m(spacer)[33m;[39m
+    [90m 85|[39m     await waitFor(() => expect(screen.getAllByText('Untitled').length)…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/App.test.tsx[2m > [22mEditor Core Tests[2m > [22mcloseTab unsaved confirmation[2m > [22mcloses a clean tab without asking for confirmation
+[31m[1mTestingLibraryElementError[22m: Unable to find an element with the text: Untitled. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[31m
+  [36m<div />[31m
+[36m</body>[31m[39m
+[90m [2m❯[22m Object.getElementError ../../node_modules/@testing-library/dom/dist/config.js:[2m37:19[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m76:38[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m52:17[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m95:19[22m[39m
+[36m [2m❯[22m src/App.test.tsx:[2m129:26[22m[39m
+    [90m127|[39m       )[33m;[39m
+    [90m128|[39m       [35mawait[39m [34mwaitFor[39m(() [33m=>[39m screen[33m.[39m[34mgetByText[39m([32m'Untitled'[39m))[33m;[39m
+    [90m129|[39m       const tab = screen.getByText('Untitled').closest('div') as HTMLE…
+    [90m   |[39m                          [31m^[39m
+    [90m130|[39m       [35mconst[39m svg [33m=[39m tab[33m.[39m[34mquerySelector[39m([32m'svg'[39m) [35mas[39m [33mSVGElement[39m[33m;[39m
+    [90m131|[39m       fireEvent[33m.[39m[34mclick[39m(svg)[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/App.test.tsx[2m > [22mEditor Core Tests[2m > [22mcloseTab unsaved confirmation[2m > [22mcancels close when user chooses Cancel on dirty tab
+[31m[1mTestingLibraryElementError[22m: Unable to find an element with the text: /dirty\.txt/. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[31m
+  [36m<div />[31m
+[36m</body>[31m[39m
+[90m [2m❯[22m Object.getElementError ../../node_modules/@testing-library/dom/dist/config.js:[2m37:19[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m76:38[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m52:17[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m95:19[22m[39m
+[36m [2m❯[22m getCloseButton src/App.test.tsx:[2m113:26[22m[39m
+    [90m111|[39m
+    [90m112|[39m     [35mconst[39m getCloseButton [33m=[39m () [33m=>[39m {
+    [90m113|[39m       const tab = screen.getByText(/dirty\.txt/).closest('div') as HTM…
+    [90m   |[39m                          [31m^[39m
+    [90m114|[39m       // The close icon <X/> is rendered as an SVG sibling of the titl…
+    [90m115|[39m       [35mconst[39m svg [33m=[39m tab[33m.[39m[34mquerySelector[39m([32m'svg'[39m)[33m;[39m
+[90m [2m❯[22m src/App.test.tsx:[2m140:23[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/6]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/App.test.tsx[2m > [22mEditor Core Tests[2m > [22mcloseTab unsaved confirmation[2m > [22mdiscards changes and closes when user chooses Don't Save
+[31m[1mTestingLibraryElementError[22m: Unable to find an element with the text: /dirty\.txt/. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[31m
+  [36m<div />[31m
+[36m</body>[31m[39m
+[90m [2m❯[22m Object.getElementError ../../node_modules/@testing-library/dom/dist/config.js:[2m37:19[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m76:38[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m52:17[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m95:19[22m[39m
+[36m [2m❯[22m getCloseButton src/App.test.tsx:[2m113:26[22m[39m
+    [90m111|[39m
+    [90m112|[39m     [35mconst[39m getCloseButton [33m=[39m () [33m=>[39m {
+    [90m113|[39m       const tab = screen.getByText(/dirty\.txt/).closest('div') as HTM…
+    [90m   |[39m                          [31m^[39m
+    [90m114|[39m       // The close icon <X/> is rendered as an SVG sibling of the titl…
+    [90m115|[39m       [35mconst[39m svg [33m=[39m tab[33m.[39m[34mquerySelector[39m([32m'svg'[39m)[33m;[39m
+[90m [2m❯[22m src/App.test.tsx:[2m150:23[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/6]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/App.test.tsx[2m > [22mEditor Core Tests[2m > [22mcloseTab unsaved confirmation[2m > [22msaves and closes when user chooses Save
+[31m[1mTestingLibraryElementError[22m: Unable to find an element with the text: /dirty\.txt/. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[31m
+  [36m<div />[31m
+[36m</body>[31m[39m
+[90m [2m❯[22m Object.getElementError ../../node_modules/@testing-library/dom/dist/config.js:[2m37:19[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m76:38[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m52:17[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m95:19[22m[39m
+[36m [2m❯[22m getCloseButton src/App.test.tsx:[2m113:26[22m[39m
+    [90m111|[39m
+    [90m112|[39m     [35mconst[39m getCloseButton [33m=[39m () [33m=>[39m {
+    [90m113|[39m       const tab = screen.getByText(/dirty\.txt/).closest('div') as HTM…
+    [90m   |[39m                          [31m^[39m
+    [90m114|[39m       // The close icon <X/> is rendered as an SVG sibling of the titl…
+    [90m115|[39m       [35mconst[39m svg [33m=[39m tab[33m.[39m[34mquerySelector[39m([32m'svg'[39m)[33m;[39m
+[90m [2m❯[22m src/App.test.tsx:[2m159:23[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/6]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/App.test.tsx[2m > [22mEditor Core Tests[2m > [22mcloseTab unsaved confirmation[2m > [22maborts close when save dialog is cancelled
+[31m[1mTestingLibraryElementError[22m: Unable to find an element with the text: /dirty\.txt/. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[31m
+  [36m<div />[31m
+[36m</body>[31m[39m
+[90m [2m❯[22m Object.getElementError ../../node_modules/@testing-library/dom/dist/config.js:[2m37:19[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m76:38[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m52:17[22m[39m
+[90m [2m❯[22m ../../node_modules/@testing-library/dom/dist/query-helpers.js:[2m95:19[22m[39m
+[36m [2m❯[22m getCloseButton src/App.test.tsx:[2m113:26[22m[39m
+    [90m111|[39m
+    [90m112|[39m     [35mconst[39m getCloseButton [33m=[39m () [33m=>[39m {
+    [90m113|[39m       const tab = screen.getByText(/dirty\.txt/).closest('div') as HTM…
+    [90m   |[39m                          [31m^[39m
+    [90m114|[39m       // The close icon <X/> is rendered as an SVG sibling of the titl…
+    [90m115|[39m       [35mconst[39m svg [33m=[39m tab[33m.[39m[34mquerySelector[39m([32m'svg'[39m)[33m;[39m
+[90m [2m❯[22m src/App.test.tsx:[2m168:23[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/6]⎯[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Unhandled Errors [49m[22m[31m⎯⎯⎯⎯⎯⎯[39m
+[31m[1m
+Vitest caught 6 unhandled errors during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.[22m[39m
+
+[31m⎯⎯⎯⎯⎯[39m[1m[41m Uncaught Exception [49m[22m[31m⎯⎯⎯⎯⎯[39m
+[31m[1mTypeError[22m: activeTabElRef.current?.scrollIntoView is not a function[39m
+[36m [2m❯[22m src/App.tsx:[2m375:29[22m[39m
+    [90m373|[39m   [35mconst[39m activeTabElRef [33m=[39m [33mReact[39m[33m.[39museRef[33m<[39m[33mHTMLDivElement[39m [33m|[39m [35mnull[39m[33m>[39m([35mnull[39m)[33m;[39m
+    [90m374|[39m   [34museEffect[39m(() [33m=>[39m {
+    [90m375|[39m     activeTabElRef.current?.scrollIntoView({ inline: 'nearest', block:…
+    [90m   |[39m                             [31m^[39m
+    [90m376|[39m   }[33m,[39m [activeTabId[33m,[39m tabs[33m.[39mlength])[33m;[39m
+    [90m377|[39m
+[90m [2m❯[22m Object.react_stack_bottom_frame ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m25989:20[22m[39m
+[90m [2m❯[22m runWithFiberInDEV ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m874:13[22m[39m
+[90m [2m❯[22m commitHookEffectListMount ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m13249:29[22m[39m
+[90m [2m❯[22m commitHookPassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m13336:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15484:13[22m[39m
+[90m [2m❯[22m recursivelyTraversePassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15439:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15718:11[22m[39m
+[90m [2m❯[22m recursivelyTraversePassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15439:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15476:11[22m[39m
+
+[31mThis error originated in "[1msrc/App.test.tsx[22m" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.[39m
+[31mThe latest test that might've caused the error is "[1mshould open a new tab when double-clicking the empty tab bar space[22m". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.[39m
+
+[31m⎯⎯⎯⎯⎯[39m[1m[41m Uncaught Exception [49m[22m[31m⎯⎯⎯⎯⎯[39m
+[31m[1mTypeError[22m: activeTabElRef.current?.scrollIntoView is not a function[39m
+[36m [2m❯[22m src/App.tsx:[2m375:29[22m[39m
+    [90m373|[39m   [35mconst[39m activeTabElRef [33m=[39m [33mReact[39m[33m.[39museRef[33m<[39m[33mHTMLDivElement[39m [33m|[39m [35mnull[39m[33m>[39m([35mnull[39m)[33m;[39m
+    [90m374|[39m   [34museEffect[39m(() [33m=>[39m {
+    [90m375|[39m     activeTabElRef.current?.scrollIntoView({ inline: 'nearest', block:…
+    [90m   |[39m                             [31m^[39m
+    [90m376|[39m   }[33m,[39m [activeTabId[33m,[39m tabs[33m.[39mlength])[33m;[39m
+    [90m377|[39m
+[90m [2m❯[22m Object.react_stack_bottom_frame ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m25989:20[22m[39m
+[90m [2m❯[22m runWithFiberInDEV ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m874:13[22m[39m
+[90m [2m❯[22m commitHookEffectListMount ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m13249:29[22m[39m
+[90m [2m❯[22m commitHookPassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m13336:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15484:13[22m[39m
+[90m [2m❯[22m recursivelyTraversePassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15439:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15718:11[22m[39m
+[90m [2m❯[22m recursivelyTraversePassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15439:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15476:11[22m[39m
+
+[31mThis error originated in "[1msrc/App.test.tsx[22m" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.[39m
+[31mThe latest test that might've caused the error is "[1mcloses a clean tab without asking for confirmation[22m". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.[39m
+
+[31m⎯⎯⎯⎯⎯[39m[1m[41m Uncaught Exception [49m[22m[31m⎯⎯⎯⎯⎯[39m
+[31m[1mTypeError[22m: activeTabElRef.current?.scrollIntoView is not a function[39m
+[36m [2m❯[22m src/App.tsx:[2m375:29[22m[39m
+    [90m373|[39m   [35mconst[39m activeTabElRef [33m=[39m [33mReact[39m[33m.[39museRef[33m<[39m[33mHTMLDivElement[39m [33m|[39m [35mnull[39m[33m>[39m([35mnull[39m)[33m;[39m
+    [90m374|[39m   [34museEffect[39m(() [33m=>[39m {
+    [90m375|[39m     activeTabElRef.current?.scrollIntoView({ inline: 'nearest', block:…
+    [90m   |[39m                             [31m^[39m
+    [90m376|[39m   }[33m,[39m [activeTabId[33m,[39m tabs[33m.[39mlength])[33m;[39m
+    [90m377|[39m
+[90m [2m❯[22m Object.react_stack_bottom_frame ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m25989:20[22m[39m
+[90m [2m❯[22m runWithFiberInDEV ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m874:13[22m[39m
+[90m [2m❯[22m commitHookEffectListMount ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m13249:29[22m[39m
+[90m [2m❯[22m commitHookPassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m13336:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15484:13[22m[39m
+[90m [2m❯[22m recursivelyTraversePassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15439:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15718:11[22m[39m
+[90m [2m❯[22m recursivelyTraversePassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15439:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15476:11[22m[39m
+
+[31mThis error originated in "[1msrc/App.test.tsx[22m" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.[39m
+[31mThe latest test that might've caused the error is "[1mcancels close when user chooses Cancel on dirty tab[22m". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.[39m
+
+[31m⎯⎯⎯⎯⎯[39m[1m[41m Uncaught Exception [49m[22m[31m⎯⎯⎯⎯⎯[39m
+[31m[1mTypeError[22m: activeTabElRef.current?.scrollIntoView is not a function[39m
+[36m [2m❯[22m src/App.tsx:[2m375:29[22m[39m
+    [90m373|[39m   [35mconst[39m activeTabElRef [33m=[39m [33mReact[39m[33m.[39museRef[33m<[39m[33mHTMLDivElement[39m [33m|[39m [35mnull[39m[33m>[39m([35mnull[39m)[33m;[39m
+    [90m374|[39m   [34museEffect[39m(() [33m=>[39m {
+    [90m375|[39m     activeTabElRef.current?.scrollIntoView({ inline: 'nearest', block:…
+    [90m   |[39m                             [31m^[39m
+    [90m376|[39m   }[33m,[39m [activeTabId[33m,[39m tabs[33m.[39mlength])[33m;[39m
+    [90m377|[39m
+[90m [2m❯[22m Object.react_stack_bottom_frame ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m25989:20[22m[39m
+[90m [2m❯[22m runWithFiberInDEV ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m874:13[22m[39m
+[90m [2m❯[22m commitHookEffectListMount ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m13249:29[22m[39m
+[90m [2m❯[22m commitHookPassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m13336:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15484:13[22m[39m
+[90m [2m❯[22m recursivelyTraversePassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15439:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15718:11[22m[39m
+[90m [2m❯[22m recursivelyTraversePassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15439:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15476:11[22m[39m
+
+[31mThis error originated in "[1msrc/App.test.tsx[22m" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.[39m
+[31mThe latest test that might've caused the error is "[1mdiscards changes and closes when user chooses Don't Save[22m". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.[39m
+
+[31m⎯⎯⎯⎯⎯[39m[1m[41m Uncaught Exception [49m[22m[31m⎯⎯⎯⎯⎯[39m
+[31m[1mTypeError[22m: activeTabElRef.current?.scrollIntoView is not a function[39m
+[36m [2m❯[22m src/App.tsx:[2m375:29[22m[39m
+    [90m373|[39m   [35mconst[39m activeTabElRef [33m=[39m [33mReact[39m[33m.[39museRef[33m<[39m[33mHTMLDivElement[39m [33m|[39m [35mnull[39m[33m>[39m([35mnull[39m)[33m;[39m
+    [90m374|[39m   [34museEffect[39m(() [33m=>[39m {
+    [90m375|[39m     activeTabElRef.current?.scrollIntoView({ inline: 'nearest', block:…
+    [90m   |[39m                             [31m^[39m
+    [90m376|[39m   }[33m,[39m [activeTabId[33m,[39m tabs[33m.[39mlength])[33m;[39m
+    [90m377|[39m
+[90m [2m❯[22m Object.react_stack_bottom_frame ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m25989:20[22m[39m
+[90m [2m❯[22m runWithFiberInDEV ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m874:13[22m[39m
+[90m [2m❯[22m commitHookEffectListMount ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m13249:29[22m[39m
+[90m [2m❯[22m commitHookPassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m13336:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15484:13[22m[39m
+[90m [2m❯[22m recursivelyTraversePassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15439:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15718:11[22m[39m
+[90m [2m❯[22m recursivelyTraversePassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15439:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15476:11[22m[39m
+
+[31mThis error originated in "[1msrc/App.test.tsx[22m" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.[39m
+[31mThe latest test that might've caused the error is "[1msaves and closes when user chooses Save[22m". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.[39m
+
+[31m⎯⎯⎯⎯⎯[39m[1m[41m Uncaught Exception [49m[22m[31m⎯⎯⎯⎯⎯[39m
+[31m[1mTypeError[22m: activeTabElRef.current?.scrollIntoView is not a function[39m
+[36m [2m❯[22m src/App.tsx:[2m375:29[22m[39m
+    [90m373|[39m   [35mconst[39m activeTabElRef [33m=[39m [33mReact[39m[33m.[39museRef[33m<[39m[33mHTMLDivElement[39m [33m|[39m [35mnull[39m[33m>[39m([35mnull[39m)[33m;[39m
+    [90m374|[39m   [34museEffect[39m(() [33m=>[39m {
+    [90m375|[39m     activeTabElRef.current?.scrollIntoView({ inline: 'nearest', block:…
+    [90m   |[39m                             [31m^[39m
+    [90m376|[39m   }[33m,[39m [activeTabId[33m,[39m tabs[33m.[39mlength])[33m;[39m
+    [90m377|[39m
+[90m [2m❯[22m Object.react_stack_bottom_frame ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m25989:20[22m[39m
+[90m [2m❯[22m runWithFiberInDEV ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m874:13[22m[39m
+[90m [2m❯[22m commitHookEffectListMount ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m13249:29[22m[39m
+[90m [2m❯[22m commitHookPassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m13336:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15484:13[22m[39m
+[90m [2m❯[22m recursivelyTraversePassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15439:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15718:11[22m[39m
+[90m [2m❯[22m recursivelyTraversePassiveMountEffects ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15439:11[22m[39m
+[90m [2m❯[22m commitPassiveMountOnFiber ../../node_modules/react-dom/cjs/react-dom-client.development.js:[2m15476:11[22m[39m
+
+[31mThis error originated in "[1msrc/App.test.tsx[22m" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.[39m
+[31mThe latest test that might've caused the error is "[1maborts close when save dialog is cancelled[22m". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.[39m
+[31m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m6 failed[39m[22m[2m | [22m[1m[32m5 passed[39m[22m[90m (11)[39m
+[2m     Errors [22m [1m[31m6 errors[39m[22m
+[2m   Start at [22m 00:08:44
+[2m   Duration [22m 855ms[2m (transform 72ms, setup 0ms, import 211ms, tests 134ms, environment 420ms)[22m
+

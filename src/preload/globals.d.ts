@@ -1,10 +1,14 @@
 declare global {
   interface Window {
     electronAPI: {
-      openFileDialog: () => Promise<{ filePath: string; content: string } | null>;
-      saveFileDialog: (filePath: string | null, content: string) => Promise<string | null>;
+      openFileDialog: () => Promise<{ filePath: string; content: string; eol: 'LF' | 'CRLF' } | null>;
+      saveFileDialog: (
+        filePath: string | null,
+        content: string,
+        eol?: 'LF' | 'CRLF'
+      ) => Promise<string | null>;
       confirmUnsavedChanges: (tabTitle: string) => Promise<'save' | 'dont-save' | 'cancel'>;
-      readFile: (filePath: string) => Promise<{ filePath: string; content: string } | null>;
+      readFile: (filePath: string) => Promise<{ filePath: string; content: string; eol: 'LF' | 'CRLF' } | null>;
       getPathForFile: (file: File) => string;
 
       saveSession: (session: {
@@ -15,6 +19,7 @@ declare global {
           filePath: string | null;
           content: string;
           isDirty: boolean;
+          eol?: 'LF' | 'CRLF';
         }>;
       }) => Promise<boolean>;
       loadSession: () => Promise<{
@@ -25,6 +30,7 @@ declare global {
           filePath: string | null;
           content: string;
           isDirty: boolean;
+          eol?: 'LF' | 'CRLF';
         }>;
       } | null>;
 

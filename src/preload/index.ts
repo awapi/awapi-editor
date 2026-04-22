@@ -2,7 +2,8 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 export const electronAPI = {
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
-  saveFileDialog: (filePath: string | null, content: string) => ipcRenderer.invoke('dialog:saveFile', filePath, content),
+  saveFileDialog: (filePath: string | null, content: string, eol?: 'LF' | 'CRLF') =>
+    ipcRenderer.invoke('dialog:saveFile', filePath, content, eol),
   confirmUnsavedChanges: (tabTitle: string) => ipcRenderer.invoke('dialog:confirmUnsavedChanges', tabTitle) as Promise<'save' | 'dont-save' | 'cancel'>,
   readFile: (filePath: string) => ipcRenderer.invoke('file:read', filePath),
   getPathForFile: (file: File) => webUtils.getPathForFile(file),

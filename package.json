@@ -6,9 +6,9 @@
   "scripts": {
     "test": "vitest run",
     "dev": "vite",
-    "build": "NODE_ENV=production vite build",
-    "package": "NODE_ENV=production vite build && electron-builder",
-    "release": "NODE_ENV=production vite build && electron-builder --publish always",
+    "build": "cross-env NODE_ENV=production vite build",
+    "package": "cross-env NODE_ENV=production vite build && electron-builder",
+    "release": "cross-env NODE_ENV=production vite build && electron-builder --publish always",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "icons": "node scripts/generate-icons.js"

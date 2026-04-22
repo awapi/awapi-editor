@@ -259,12 +259,42 @@ const App: React.FC = () => {
     ));
   };
 
-  const closeTab = (e: React.MouseEvent, id: string) => {
+  const closeTab = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    // Simplified: No dirtiness check for time concerns
+
+    const tab = tabs.find(t => t.id === id);
+    if (!tab) return;
+
+    if (tab.isDirty) {
+      const w = window as any;
+      // Fallback to window.confirm if native dialog IPC is unavailable (e.g. tests).
+      let choice: 'save' | 'dont-save' | 'cancel';
+      if (w.electronAPI?.confirmUnsavedChanges) {
+        choice = await w.electronAPI.confirmUnsavedChanges(tab.title);
+      } else {
+        const ok = typeof window.confirm === 'function'
+          ? window.confirm(`Discard unsaved changes to ${tab.title}?`)
+          : true;
+        choice = ok ? 'dont-save' : 'cancel';
+      }
+
+      if (choice === 'cancel') return;
+
+      if (choice === 'save') {
+        if (!w.electronAPI?.saveFileDialog) return;
+        try {
+          const savedPath = await w.electronAPI.saveFileDialog(tab.filePath, tab.content);
+          if (!savedPath) return; // Save dialog cancelled – abort close
+        } catch (err) {
+          console.error('Error saving file during close', err);
+          return;
+        }
+      }
+    }
+
     const newTabs = tabs.filter(t => t.id !== id);
     setTabs(newTabs);
-    
+
     if (activeTabId === id) {
       setActiveTabId(newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null);
     }
@@ -399,7 +429,8 @@ const App: React.FC = () => {
               wordWrap: wordWrap ? 'on' : 'off',
               formatOnType: true,
               formatOnPaste: true,
-              padding: { top: 12 },
+              padding: { top: 6 },
+              lineNumbersMinChars: 6,
             }}
           />
         ) : (

@@ -104,6 +104,23 @@ ipcMain.handle('session:load', async () => {
   }
 });
 
+ipcMain.handle('dialog:confirmUnsavedChanges', async (_, tabTitle: string) => {
+  if (!mainWindow) return 'cancel';
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'warning',
+    buttons: ['Save', "Don't Save", 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+    title: 'Unsaved Changes',
+    message: `Do you want to save the changes you made to ${tabTitle}?`,
+    detail: "Your changes will be lost if you don't save them.",
+    noLink: true,
+  });
+  if (response === 0) return 'save';
+  if (response === 1) return 'dont-save';
+  return 'cancel';
+});
+
 ipcMain.handle('dialog:saveFile', async (_, filePath: string, content: string) => {
   if (!mainWindow) return null;
   let targetPath = filePath;

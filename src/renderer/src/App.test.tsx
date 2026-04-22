@@ -84,4 +84,90 @@ describe('Editor Core Tests', () => {
     fireEvent.dblClick(spacer);
     await waitFor(() => expect(screen.getAllByText('Untitled').length).toBe(tabsBefore + 1));
   });
+
+  describe('closeTab unsaved confirmation', () => {
+    const makeDirtySession = () => ({
+      activeTabId: 'dirty-1',
+      tabs: [
+        {
+          id: 'dirty-1',
+          title: 'dirty.txt',
+          filePath: '/tmp/dirty.txt',
+          content: 'edited content',
+          isDirty: true,
+        },
+      ],
+    });
+
+    const renderWithDirtyTab = async () => {
+      (window as any).electronAPI.loadSession.mockResolvedValueOnce(makeDirtySession());
+      render(
+        <ThemeProvider>
+          <App />
+        </ThemeProvider>
+      );
+      await waitFor(() => screen.getByText(/dirty\.txt/));
+    };
+
+    const getCloseButton = () => {
+      const tab = screen.getByText(/dirty\.txt/).closest('div') as HTMLElement;
+      // The close icon <X/> is rendered as an SVG sibling of the title span.
+      const svg = tab.querySelector('svg');
+      if (!svg) throw new Error('Close icon not found');
+      return svg;
+    };
+
+    it('closes a clean tab without asking for confirmation', async () => {
+      const confirmMock = vi.fn();
+      (window as any).electronAPI.confirmUnsavedChanges = confirmMock;
+      render(
+        <ThemeProvider>
+          <App />
+        </ThemeProvider>
+      );
+      await waitFor(() => screen.getByText('Untitled'));
+      const tab = screen.getByText('Untitled').closest('div') as HTMLElement;
+      const svg = tab.querySelector('svg') as SVGElement;
+      fireEvent.click(svg);
+      await waitFor(() => expect(screen.queryByText('Untitled')).toBeNull());
+      expect(confirmMock).not.toHaveBeenCalled();
+    });
+
+    it('cancels close when user chooses Cancel on dirty tab', async () => {
+      (window as any).electronAPI.confirmUnsavedChanges = vi.fn().mockResolvedValue('cancel');
+      (window as any).electronAPI.saveFileDialog = vi.fn();
+      await renderWithDirtyTab();
+      fireEvent.click(getCloseButton());
+      await waitFor(() => expect((window as any).electronAPI.confirmUnsavedChanges).toHaveBeenCalledWith('dirty.txt'));
+      expect(screen.getByText(/dirty\.txt/)).toBeTruthy();
+      expect((window as any).electronAPI.saveFileDialog).not.toHaveBeenCalled();
+    });
+
+    it("discards changes and closes when user chooses Don't Save", async () => {
+      (window as any).electronAPI.confirmUnsavedChanges = vi.fn().mockResolvedValue('dont-save');
+      (window as any).electronAPI.saveFileDialog = vi.fn();
+      await renderWithDirtyTab();
+      fireEvent.click(getCloseButton());
+      await waitFor(() => expect(screen.queryByText(/dirty\.txt/)).toBeNull());
+      expect((window as any).electronAPI.saveFileDialog).not.toHaveBeenCalled();
+    });
+
+    it('saves and closes when user chooses Save', async () => {
+      (window as any).electronAPI.confirmUnsavedChanges = vi.fn().mockResolvedValue('save');
+      (window as any).electronAPI.saveFileDialog = vi.fn().mockResolvedValue('/tmp/dirty.txt');
+      await renderWithDirtyTab();
+      fireEvent.click(getCloseButton());
+      await waitFor(() => expect((window as any).electronAPI.saveFileDialog).toHaveBeenCalledWith('/tmp/dirty.txt', 'edited content'));
+      await waitFor(() => expect(screen.queryByText(/dirty\.txt/)).toBeNull());
+    });
+
+    it('aborts close when save dialog is cancelled', async () => {
+      (window as any).electronAPI.confirmUnsavedChanges = vi.fn().mockResolvedValue('save');
+      (window as any).electronAPI.saveFileDialog = vi.fn().mockResolvedValue(null);
+      await renderWithDirtyTab();
+      fireEvent.click(getCloseButton());
+      await waitFor(() => expect((window as any).electronAPI.saveFileDialog).toHaveBeenCalled());
+      expect(screen.getByText(/dirty\.txt/)).toBeTruthy();
+    });
+  });
 });

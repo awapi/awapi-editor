@@ -3,6 +3,7 @@ declare global {
     electronAPI: {
       openFileDialog: () => Promise<{ filePath: string; content: string } | null>;
       saveFileDialog: (filePath: string | null, content: string) => Promise<string | null>;
+      confirmUnsavedChanges: (tabTitle: string) => Promise<'save' | 'dont-save' | 'cancel'>;
       readFile: (filePath: string) => Promise<{ filePath: string; content: string } | null>;
       getPathForFile: (file: File) => string;
 

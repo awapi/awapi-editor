@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import { join } from 'path';
 import * as fs from 'fs';
+import { checkForUpdates } from './updater';
 
 app.name = 'AwapiEditor';
 
@@ -40,6 +41,16 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+
+  // Silent background update check on startup (production only).
+  // Delayed a few seconds so it never competes with window startup work.
+  if (!isDev) {
+    setTimeout(() => {
+      checkForUpdates({ parentWindow: mainWindow }).catch((err) =>
+        console.error('Background update check failed:', err),
+      );
+    }, 4000);
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -124,6 +135,11 @@ const template: Electron.MenuItemConstructorOptions[] = [
         submenu: [
           { role: 'about' as const },
           { type: 'separator' as const },
+          {
+            label: 'Check for Updates…',
+            click: () => checkForUpdates({ notifyIfUpToDate: true, parentWindow: mainWindow })
+          },
+          { type: 'separator' as const },
           { role: 'services' as const },
           { type: 'separator' as const },
           { role: 'hide' as const },
@@ -190,6 +206,15 @@ const template: Electron.MenuItemConstructorOptions[] = [
              dialog.showErrorBox('Coming Soon', 'Custom Theme ZIP/JSON uploading will be implemented here.');
           }}
         ]
+      }
+    ]
+  },
+  {
+    role: 'help',
+    submenu: [
+      {
+        label: 'Check for Updates\u2026',
+        click: () => checkForUpdates({ notifyIfUpToDate: true, parentWindow: mainWindow })
       }
     ]
   }

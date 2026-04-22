@@ -6,6 +6,8 @@ export interface SessionTab {
   filePath: string | null;
   content: string;
   isDirty: boolean;
+  /** Explicit Monaco language override (undefined = infer from filename). */
+  language?: string;
 }
 
 export interface SessionData {
@@ -25,7 +27,7 @@ const SAVE_DEBOUNCE_MS = 800;
  * For unsaved / dirty files the full content is stored so nothing is lost.
  */
 export function useSessionPersistence(
-  tabs: Array<{ id: string; title: string; filePath: string | null; content: string; isDirty?: boolean }>,
+  tabs: Array<{ id: string; title: string; filePath: string | null; content: string; isDirty?: boolean; language?: string }>,
   activeTabId: string | null
 ): void {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -43,6 +45,7 @@ export function useSessionPersistence(
         // Omit content for clean disk-backed files; restore will re-read from disk
         content: tab.isDirty || !tab.filePath ? tab.content : '',
         isDirty: tab.isDirty ?? false,
+        language: tab.language,
       })),
     };
 

@@ -3,6 +3,8 @@ import Editor from '@monaco-editor/react';
 import { X } from 'lucide-react';
 import { useTheme } from './theme/ThemeContext';
 import { useSessionPersistence, loadSession, SessionTab } from './useSessionPersistence';
+import LanguageSelector from './LanguageSelector';
+import { inferLanguageFromFilename } from './languages';
 
 interface Tab {
   id: string;
@@ -10,6 +12,9 @@ interface Tab {
   filePath: string | null;
   content: string;
   isDirty?: boolean;
+  /** User-selected Monaco language id. When undefined, the language is
+   *  inferred from the filename extension (or "plaintext" if none). */
+  language?: string;
 }
 
 const App: React.FC = () => {
@@ -46,48 +51,54 @@ const App: React.FC = () => {
   useSessionPersistence(tabs, activeTabId);
 
   useEffect(() => {
-    if (initDoneRef.current) return;
-    initDoneRef.current = true;
+    // Session restore is a one-shot operation: guard it so React StrictMode's
+    // double-invoke in development doesn't create duplicate tabs. Listener
+    // wiring, on the other hand, MUST run on every effect mount (and clean up
+    // on unmount) – otherwise StrictMode's mount → cleanup → mount sequence
+    // leaves the app with no IPC or drag listeners attached in dev builds.
+    if (!initDoneRef.current) {
+      initDoneRef.current = true;
 
-    // Restore previous session, or open a blank tab if none exists
-    (async () => {
-      const w = window as any;
-      let sessionRestored = false;
+      // Restore previous session, or open a blank tab if none exists
+      (async () => {
+        const w = window as any;
+        let sessionRestored = false;
 
-      if (w.electronAPI) {
-        try {
-          const session = await loadSession();
-          if (session && session.tabs.length > 0) {
-            // Re-read clean saved files from disk so we always get fresh content
-            const restoredTabs = await Promise.all(
-              session.tabs.map(async (saved: SessionTab) => {
-                if (saved.filePath && !saved.isDirty) {
-                  try {
-                    const fileData = await w.electronAPI.readFile(saved.filePath);
-                    if (fileData) return { ...saved, content: fileData.content };
-                  } catch {
-                    // File no longer exists – fall through and use stored content
+        if (w.electronAPI) {
+          try {
+            const session = await loadSession();
+            if (session && session.tabs.length > 0) {
+              // Re-read clean saved files from disk so we always get fresh content
+              const restoredTabs = await Promise.all(
+                session.tabs.map(async (saved: SessionTab) => {
+                  if (saved.filePath && !saved.isDirty) {
+                    try {
+                      const fileData = await w.electronAPI.readFile(saved.filePath);
+                      if (fileData) return { ...saved, content: fileData.content };
+                    } catch {
+                      // File no longer exists – fall through and use stored content
+                    }
                   }
-                }
-                return { ...saved };
-              })
-            );
-            setTabs(restoredTabs);
-            const validActiveId = session.activeTabId && restoredTabs.some((t: SessionTab) => t.id === session.activeTabId)
-              ? session.activeTabId
-              : restoredTabs[0]?.id ?? null;
-            setActiveTabId(validActiveId);
-            sessionRestored = true;
+                  return { ...saved };
+                })
+              );
+              setTabs(restoredTabs);
+              const validActiveId = session.activeTabId && restoredTabs.some((t: SessionTab) => t.id === session.activeTabId)
+                ? session.activeTabId
+                : restoredTabs[0]?.id ?? null;
+              setActiveTabId(validActiveId);
+              sessionRestored = true;
+            }
+          } catch (e) {
+            console.error('Failed to restore session:', e);
           }
-        } catch (e) {
-          console.error('Failed to restore session:', e);
         }
-      }
 
-      if (!sessionRestored) {
-        addNewTab();
-      }
-    })();
+        if (!sessionRestored) {
+          addNewTab();
+        }
+      })();
+    }
 
     // Listen to IPC
     const w = window as any;
@@ -261,6 +272,15 @@ const App: React.FC = () => {
 
   const activeTab = tabs.find(t => t.id === activeTabId);
 
+  const inferredLanguage = activeTab ? inferLanguageFromFilename(activeTab.filePath ?? activeTab.title) : 'plaintext';
+  const effectiveLanguage = activeTab?.language ?? inferredLanguage;
+  const isLanguageInferred = !activeTab?.language;
+
+  const handleLanguageChange = (languageId: string) => {
+    if (!activeTabId) return;
+    setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, language: languageId } : t));
+  };
+
   const handleDragStart = (e: React.DragEvent, index: number) => {
     e.dataTransfer.setData('text/plain', index.toString());
     e.dataTransfer.effectAllowed = 'move';
@@ -367,6 +387,7 @@ const App: React.FC = () => {
             height="100%"
             theme={currentTheme === 'light' ? 'light' : 'vs-dark'} /* Monaco respects custom definitions elsewhere if we register them */
             path={activeTab.title} /* Monaco uses path to infer language (e.g. file.json -> json) */
+            language={effectiveLanguage}
             value={activeTab.content}
             onChange={handleEditorChange}
             onMount={(editor) => {
@@ -378,12 +399,42 @@ const App: React.FC = () => {
               wordWrap: wordWrap ? 'on' : 'off',
               formatOnType: true,
               formatOnPaste: true,
+              padding: { top: 12 },
             }}
           />
         ) : (
           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#666' }}>
             <p>No tabs open. Press Cmd/Ctrl+N to create a new file.</p>
           </div>
+        )}
+      </div>
+
+      {/* Status Bar */}
+      <div
+        data-testid="status-bar"
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          alignItems: 'center',
+          padding: '4px 8px',
+          borderTop: `1px solid ${colors.tabHover}`,
+          backgroundColor: colors.tabBackground,
+          flexShrink: 0,
+        }}
+      >
+        {activeTab && (
+          <LanguageSelector
+            languageId={effectiveLanguage}
+            inferred={isLanguageInferred}
+            onChange={handleLanguageChange}
+            colors={{
+              background: colors.background,
+              foreground: colors.foreground,
+              tabBackground: colors.tabBackground,
+              tabActiveBackground: colors.tabActiveBackground,
+              tabHover: colors.tabHover,
+            }}
+          />
         )}
       </div>
     </div>

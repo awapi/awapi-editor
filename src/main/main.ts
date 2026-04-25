@@ -497,6 +497,12 @@ function resetZoom(wc: Electron.WebContents): void {
 
 const isMac = process.platform === 'darwin';
 
+// Electron types the `win` parameter of menu click callbacks as
+// `BrowserWindow | BaseWindow`. Only BrowserWindow has webContents,
+// which is all we ever use here, so we narrow it with this helper.
+const asBrowserWindow = (win: Electron.BrowserWindow | Electron.BaseWindow | undefined): Electron.BrowserWindow | undefined =>
+  win instanceof BrowserWindow ? win : undefined;
+
 const template: Electron.MenuItemConstructorOptions[] = [
   // App Menu (macOS only)
   ...(isMac
@@ -523,11 +529,11 @@ const template: Electron.MenuItemConstructorOptions[] = [
   {
     label: 'File',
     submenu: [
-      { label: 'New', accelerator: 'CmdOrCtrl+N', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:new') },
-      { label: 'Open', accelerator: 'CmdOrCtrl+O', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:open') },
-      { label: 'Save', accelerator: 'CmdOrCtrl+S', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:save') },
-      { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:saveAs') },
-      { label: 'Pop Out to New Window', accelerator: 'CmdOrCtrl+Shift+N', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:popoutActiveTab') },
+      { label: 'New', accelerator: 'CmdOrCtrl+N', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:new') },
+      { label: 'Open', accelerator: 'CmdOrCtrl+O', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:open') },
+      { label: 'Save', accelerator: 'CmdOrCtrl+S', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:save') },
+      { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:saveAs') },
+      { label: 'Pop Out to New Window', accelerator: 'CmdOrCtrl+Shift+N', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:popoutActiveTab') },
       { type: 'separator' },
       {
         label: 'Preferences…',
@@ -538,7 +544,7 @@ const template: Electron.MenuItemConstructorOptions[] = [
       {
         label: 'Print Preview…',
         accelerator: 'CmdOrCtrl+Shift+P',
-        click: (_item, win) => { (win ?? mainWindow)?.webContents.send('menu:printPreview'); }
+        click: (_item, win) => { (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:printPreview'); }
       },
       {
         label: 'Print…', accelerator: 'CmdOrCtrl+P', click: async () => {
@@ -569,18 +575,18 @@ const template: Electron.MenuItemConstructorOptions[] = [
       { role: 'copy' },
       { role: 'paste' },
       { type: 'separator' },
-      { label: 'Find...', accelerator: 'CmdOrCtrl+F', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:find') },
-      { label: 'Replace...', accelerator: 'CmdOrCtrl+H', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:replace') },
+      { label: 'Find...', accelerator: 'CmdOrCtrl+F', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:find') },
+      { label: 'Replace...', accelerator: 'CmdOrCtrl+H', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:replace') },
       { type: 'separator' },
-      { label: 'Format Document', accelerator: 'Shift+Alt+F', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:format') },
+      { label: 'Format Document', accelerator: 'Shift+Alt+F', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:format') },
     ]
   },
   {
     label: 'View',
     submenu: [
-      { label: 'Zoom In',    accelerator: 'CmdOrCtrl+=', click: (_item, win) => adjustZoom((win ?? mainWindow)!.webContents, +1) },
-      { label: 'Zoom Out',   accelerator: 'CmdOrCtrl+-', click: (_item, win) => adjustZoom((win ?? mainWindow)!.webContents, -1) },
-      { label: 'Reset Zoom', accelerator: 'CmdOrCtrl+0', click: (_item, win) => resetZoom((win ?? mainWindow)!.webContents) },
+      { label: 'Zoom In',    accelerator: 'CmdOrCtrl+=', click: (_item, win) => adjustZoom((asBrowserWindow(win) ?? mainWindow)!.webContents, +1) },
+      { label: 'Zoom Out',   accelerator: 'CmdOrCtrl+-', click: (_item, win) => adjustZoom((asBrowserWindow(win) ?? mainWindow)!.webContents, -1) },
+      { label: 'Reset Zoom', accelerator: 'CmdOrCtrl+0', click: (_item, win) => resetZoom((asBrowserWindow(win) ?? mainWindow)!.webContents) },
       { type: 'separator' },
       { label: 'Pop Out Active Tab to New Window', accelerator: 'CmdOrCtrl+Shift+N', click: () => mainWindow?.webContents.send('menu:popoutActiveTab') },
       { type: 'separator' },
@@ -594,7 +600,7 @@ const template: Electron.MenuItemConstructorOptions[] = [
       {
         label: 'Show All Commands',
         accelerator: 'F1',
-        click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:showAllCommands')
+        click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:showAllCommands')
       },
       { type: 'separator' },
       {

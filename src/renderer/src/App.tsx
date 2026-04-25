@@ -5,6 +5,7 @@ import { useTheme } from './theme/ThemeContext';
 import { useSessionPersistence, loadSession, SessionTab } from './useSessionPersistence';
 import LanguageSelector from './LanguageSelector';
 import LineEndingSelector from './LineEndingSelector';
+import SettingsModal from './SettingsModal';
 import type { EolKind } from './lineEndings';
 import { inferLanguageFromFilename } from './languages';
 
@@ -26,6 +27,7 @@ const App: React.FC = () => {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [wordWrap, setWordWrap] = useState<boolean>(true);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const editorRef = React.useRef<any>(null);
 
   const addNewTab = () => {
@@ -200,6 +202,27 @@ const App: React.FC = () => {
       w.electronAPI.onFormat(() => {
         if (editorRef.current) {
           editorRef.current.getAction('editor.action.formatDocument').run();
+        }
+      });
+
+      w.electronAPI.onPrintPreview(() => {
+        const active = activeTabIdRef.current;
+        if (!active) return;
+        const currentTab = tabsRef.current.find((t: Tab) => t.id === active);
+        if (!currentTab) return;
+        const language = currentTab.language ?? inferLanguageFromFilename(currentTab.filePath ?? currentTab.title);
+        w.electronAPI.printPreview(currentTab.content, language, currentTab.title).catch((err: Error) =>
+          console.error('Print preview failed:', err)
+        );
+      });
+
+      w.electronAPI.onOpenSettings(() => {
+        setIsSettingsOpen(true);
+      });
+
+      w.electronAPI.onShowAllCommands(() => {
+        if (editorRef.current) {
+          editorRef.current.trigger('keyboard', 'editor.action.quickCommand', {});
         }
       });
 
@@ -416,7 +439,7 @@ const App: React.FC = () => {
                 color: tab.isDirty ? '#e2c08d' : colors.foreground
               }}
             >
-              <span style={{ flexGrow: 1, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+              <span style={{ flexGrow: 1, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', fontSize: '13px' }}>
                 {tab.title} {tab.isDirty && '*'}
               </span>
               <X
@@ -516,6 +539,8 @@ const App: React.FC = () => {
           </div>
         )}
       </div>
+
+      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
 
       {/* Status Bar */}
       <div

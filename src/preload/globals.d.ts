@@ -34,12 +34,22 @@ declare global {
         }>;
       } | null>;
 
+      loadSettings: () => Promise<{ sessionDir: string | null; theme?: string | null }>;
+      saveSettings: (settings: { sessionDir: string | null; theme?: string | null }) => Promise<boolean>;
+      getDefaultSessionDir: () => Promise<string>;
+      openDirDialog: () => Promise<string | null>;
+      openInExplorer: (dirPath: string) => Promise<void>;
+
       onNewFile: (callback: () => void) => void;
       onOpenFile: (callback: () => void) => void;
       onSaveFile: (callback: () => void) => void;
       onSaveAsFile: (callback: () => void) => void;
       onCloseTab: (callback: () => void) => void;
       onThemeChange: (callback: (theme: string) => void) => void;
+      onPrintPreview: (callback: () => void) => void;
+      onOpenSettings: (callback: () => void) => void;
+      onShowAllCommands: (callback: () => void) => void;
+      printPreview: (content: string, language: string, title: string) => Promise<void>;
       
       removeListeners: () => void;
     };

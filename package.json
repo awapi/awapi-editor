@@ -1,7 +1,7 @@
 {
   "name": "awapi-editor",
   "version": "0.2.8",
-  "description": "",
+  "description": "A fast, lightweight, universal text editor",
   "main": "dist/main/main.js",
   "scripts": {
     "test": "vitest run",
@@ -37,6 +37,7 @@
     },
     "linux": {
       "icon": "build/icon-512x512.png",
+      "category": "Utility",
       "target": [
         "AppImage"
       ]
@@ -58,6 +59,9 @@
     "url": "https://github.com/awapi/awapi-editor/issues"
   },
   "homepage": "https://github.com/awapi/awapi-editor#readme",
+  "overrides": {
+    "dompurify": "^3.4.1"
+  },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
     "lucide-react": "^1.8.0",

@@ -62,6 +62,13 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   useEffect(() => {
     const w = window as any;
+    // Restore persisted theme from settings on startup
+    if (w.electronAPI?.loadSettings) {
+      w.electronAPI.loadSettings().then((settings: { theme?: string | null }) => {
+        if (settings?.theme) setCurrentTheme(settings.theme);
+      }).catch(() => {});
+    }
+    // Listen for theme changes sent via the menu (legacy path)
     if (w.electronAPI?.onThemeChange) {
       w.electronAPI.onThemeChange((themeName: string) => {
         setCurrentTheme(themeName);

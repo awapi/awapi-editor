@@ -32,12 +32,25 @@ typecheck:
 build:
     npm run build
 
-# Package the app for local installation (macOS .dmg, no GitHub publish)
+# Package the app for local installation (cross-platform, no GitHub publish)
 package:
     npm run package
-    open release/AwapiEditor-*.dmg
-    @echo "Drag AwapiEditor to /Applications in the window that just opened."
-    @echo "Then run: xattr -cr /Applications/AwapiEditor.app"
+    @OS=$(uname -s); \
+    if [ "$OS" = "Darwin" ]; then \
+        open release/AwapiEditor-*.dmg; \
+        echo "Drag AwapiEditor to /Applications in the window that just opened."; \
+        echo "Then run: xattr -cr /Applications/AwapiEditor.app"; \
+    elif [ "$OS" = "Linux" ]; then \
+        echo ""; \
+        echo "✓ Build complete. AppImage is at:"; \
+        ls release/AwapiEditor-*.AppImage 2>/dev/null || ls release/*.AppImage 2>/dev/null; \
+        echo ""; \
+        echo "To run it:  chmod +x release/AwapiEditor-*.AppImage && ./release/AwapiEditor-*.AppImage"; \
+    else \
+        echo ""; \
+        echo "✓ Build complete. Installer is at:"; \
+        ls release/*.exe 2>/dev/null; \
+    fi
 
 # Clear caches and build outputs
 clean:

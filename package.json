@@ -39,8 +39,13 @@
       "icon": "build/icon-512x512.png",
       "category": "Utility",
       "target": [
-        "AppImage"
-      ]
+        "AppImage",
+        "deb"
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "deb": {
+      "maintainer": "awapi <oyesil@gmail.com>"
     },
     "files": [
       "dist/**/*",

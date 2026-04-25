@@ -28,6 +28,7 @@ export const electronAPI = {
   onPrintPreview: (callback: () => void) => ipcRenderer.on('menu:printPreview', () => callback()),
   onOpenSettings: (callback: () => void) => ipcRenderer.on('menu:openSettings', () => callback()),
   onShowAllCommands: (callback: () => void) => ipcRenderer.on('menu:showAllCommands', () => callback()),
+  onOpenFileFromArgs: (callback: (filePath: string) => void) => ipcRenderer.on('file:openFromArgs', (_, filePath) => callback(filePath)),
   printPreview: (content: string, language: string, title: string) =>
     ipcRenderer.invoke('print:preview', content, language, title),
 
@@ -45,6 +46,7 @@ export const electronAPI = {
     ipcRenderer.removeAllListeners('menu:printPreview');
     ipcRenderer.removeAllListeners('menu:openSettings');
     ipcRenderer.removeAllListeners('menu:showAllCommands');
+    ipcRenderer.removeAllListeners('file:openFromArgs');
   }
 };
 

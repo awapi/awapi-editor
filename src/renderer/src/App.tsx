@@ -226,6 +226,32 @@ const App: React.FC = () => {
         }
       });
 
+      w.electronAPI.onOpenFileFromArgs(async (filePath: string) => {
+        try {
+          const existingTab = tabsRef.current.find((t: Tab) => t.filePath === filePath);
+          if (existingTab) {
+            setActiveTabId(existingTab.id);
+            return;
+          }
+          const result = await w.electronAPI.readFile(filePath);
+          if (result) {
+            const fileName = filePath.split(/[\\/]/).pop() || filePath;
+            const id = `tab-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+            setTabs(prev => [...prev, {
+              id,
+              title: fileName,
+              filePath: result.filePath,
+              content: result.content,
+              isDirty: false,
+              eol: result.eol,
+            }]);
+            setActiveTabId(id);
+          }
+        } catch (e) {
+          console.error('Error opening file from args', e);
+        }
+      });
+
       // Handle global drag and drop
       // Use capture:true so events are intercepted BEFORE Monaco can stopPropagation()
       const preventDefault = (e: DragEvent) => {

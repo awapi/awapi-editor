@@ -29,6 +29,66 @@ const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
 let mainWindow: BrowserWindow | null = null;
 
+/**
+ * Extract a file path from argv produced by Electron / the OS.
+ * Electron prepends the executable (and in dev the Vite entry), so we skip
+ * everything up to and including "--" or the first non-flag argument that
+ * looks like a real filesystem path.
+ */
+function fileArgFromArgv(argv: string[]): string | null {
+  // In packaged builds argv[0] is the executable; in dev argv[0..1] are
+  // electron + the entry script.  We skip the first 1-2 elements and look
+  // for the first argument that is not a flag and exists on disk.
+  const candidates = argv.slice(isDev ? 2 : 1);
+  for (const arg of candidates) {
+    if (!arg.startsWith('-') && fs.existsSync(arg)) {
+      return arg;
+    }
+  }
+  return null;
+}
+
+/** Send a file-open-from-args request to the renderer once it is ready. */
+function sendFileToRenderer(filePath: string): void {
+  if (!mainWindow) return;
+  const send = () => mainWindow?.webContents.send('file:openFromArgs', filePath);
+  if (mainWindow.webContents.isLoading()) {
+    mainWindow.webContents.once('did-finish-load', send);
+  } else {
+    send();
+  }
+}
+
+// macOS: the OS sends this event when a file is opened via Finder / "Open With".
+// It may fire before or after app.whenReady(), so we capture it early.
+let pendingOpenFilePath: string | null = null;
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  if (mainWindow) {
+    sendFileToRenderer(filePath);
+  } else {
+    pendingOpenFilePath = filePath;
+  }
+});
+
+// Single-instance lock: if the app is already running and the user opens
+// another file via "Open With", the OS launches a second process. We redirect
+// that request to the existing window and quit the second process.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    // Bring existing window to front
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+    const filePath = fileArgFromArgv(argv);
+    if (filePath) sendFileToRenderer(filePath);
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1024,
@@ -56,6 +116,14 @@ app.whenReady().then(() => {
   }
 
   createWindow();
+
+  // Open file passed as CLI argument (Windows/Linux "Open With" or terminal)
+  const cliFile = fileArgFromArgv(process.argv);
+  const fileToOpen = pendingOpenFilePath ?? cliFile;
+  if (fileToOpen) {
+    sendFileToRenderer(fileToOpen);
+    pendingOpenFilePath = null;
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

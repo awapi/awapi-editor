@@ -37,6 +37,46 @@ describe('inferLanguageFromFilename', () => {
     expect(inferLanguageFromFilename('C:\\a\\b\\file.cs')).toBe('csharp');
   });
 
+  it('maps new language extensions correctly', () => {
+    expect(inferLanguageFromFilename('deploy.bat')).toBe('bat');
+    expect(inferLanguageFromFilename('run.cmd')).toBe('bat');
+    expect(inferLanguageFromFilename('main.bicep')).toBe('bicep');
+    expect(inferLanguageFromFilename('core.clj')).toBe('clojure');
+    expect(inferLanguageFromFilename('app.cljs')).toBe('clojure');
+    expect(inferLanguageFromFilename('build.edn')).toBe('clojure');
+    expect(inferLanguageFromFilename('app.coffee')).toBe('coffee');
+    expect(inferLanguageFromFilename('widget.dart')).toBe('dart');
+    expect(inferLanguageFromFilename('router.ex')).toBe('elixir');
+    expect(inferLanguageFromFilename('test.exs')).toBe('elixir');
+    expect(inferLanguageFromFilename('lib.fs')).toBe('fsharp');
+    expect(inferLanguageFromFilename('script.fsx')).toBe('fsharp');
+    expect(inferLanguageFromFilename('template.hbs')).toBe('handlebars');
+    expect(inferLanguageFromFilename('template.handlebars')).toBe('handlebars');
+    expect(inferLanguageFromFilename('main.tf')).toBe('hcl');
+    expect(inferLanguageFromFilename('vars.tfvars')).toBe('hcl');
+    expect(inferLanguageFromFilename('config.hcl')).toBe('hcl');
+    expect(inferLanguageFromFilename('solve.jl')).toBe('julia');
+    expect(inferLanguageFromFilename('AppDelegate.m')).toBe('objective-c');
+    expect(inferLanguageFromFilename('AppDelegate.mm')).toBe('objective-c');
+    expect(inferLanguageFromFilename('algo.pas')).toBe('pascal');
+    expect(inferLanguageFromFilename('script.pl')).toBe('perl');
+    expect(inferLanguageFromFilename('Module.pm')).toBe('perl');
+    expect(inferLanguageFromFilename('api.proto')).toBe('protobuf');
+    expect(inferLanguageFromFilename('index.pug')).toBe('pug');
+    expect(inferLanguageFromFilename('layout.jade')).toBe('pug');
+    expect(inferLanguageFromFilename('Index.cshtml')).toBe('razor');
+    expect(inferLanguageFromFilename('Page.razor')).toBe('razor');
+    expect(inferLanguageFromFilename('docs.rst')).toBe('restructuredtext');
+    expect(inferLanguageFromFilename('Main.scala')).toBe('scala');
+    expect(inferLanguageFromFilename('worksheet.sc')).toBe('scala');
+    expect(inferLanguageFromFilename('lib.scm')).toBe('scheme');
+    expect(inferLanguageFromFilename('util.ss')).toBe('scheme');
+    expect(inferLanguageFromFilename('Token.sol')).toBe('solidity');
+    expect(inferLanguageFromFilename('script.tcl')).toBe('tcl');
+    expect(inferLanguageFromFilename('email.twig')).toBe('twig');
+    expect(inferLanguageFromFilename('Module.vb')).toBe('vb');
+  });
+
   it('falls back to plaintext for unknown extensions', () => {
     expect(inferLanguageFromFilename('mystery.xyz')).toBe('plaintext');
   });
@@ -65,5 +105,17 @@ describe('SUPPORTED_LANGUAGES', () => {
   it('contains only unique ids', () => {
     const ids = SUPPORTED_LANGUAGES.map(l => l.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('includes newly added languages', () => {
+    const ids = new Set(SUPPORTED_LANGUAGES.map(l => l.id));
+    for (const id of [
+      'bat', 'bicep', 'clojure', 'coffee', 'dart', 'elixir', 'fsharp',
+      'handlebars', 'hcl', 'julia', 'objective-c', 'pascal', 'perl',
+      'protobuf', 'pug', 'razor', 'restructuredtext', 'scala', 'scheme',
+      'solidity', 'tcl', 'twig', 'vb',
+    ]) {
+      expect(ids.has(id), `missing language: ${id}`).toBe(true);
+    }
   });
 });

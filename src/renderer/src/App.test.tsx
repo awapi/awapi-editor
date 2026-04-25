@@ -18,6 +18,7 @@ describe('Editor Core Tests', () => {
       onPrintPreview: vi.fn(),
       onOpenSettings: vi.fn(),
       onShowAllCommands: vi.fn(),
+      onOpenFileFromArgs: vi.fn(),
       removeListeners: vi.fn(),
       readFile: vi.fn().mockResolvedValue({ filePath: '/mock/path/file.txt', content: 'mock content' }),
       saveSession: vi.fn().mockResolvedValue(true),
@@ -72,6 +73,69 @@ describe('Editor Core Tests', () => {
       </ThemeProvider>
     );
     expect((window as any).electronAPI.onFormat).toHaveBeenCalledTimes(1);
+  });
+
+  it('should register the onOpenFileFromArgs listener on mount', () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    );
+    expect((window as any).electronAPI.onOpenFileFromArgs).toHaveBeenCalledTimes(1);
+  });
+
+  it('should open a new tab when onOpenFileFromArgs fires', async () => {
+    let capturedCallback: ((filePath: string) => void) | null = null;
+    (window as any).electronAPI.onOpenFileFromArgs = vi.fn((cb: (filePath: string) => void) => {
+      capturedCallback = cb;
+    });
+    (window as any).electronAPI.readFile = vi.fn().mockResolvedValue({
+      filePath: '/tmp/arg-file.txt',
+      content: 'hello from args',
+      eol: 'LF',
+    });
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    );
+    // Wait for component to mount and register the listener
+    await waitFor(() => expect(capturedCallback).not.toBeNull());
+    capturedCallback!('/tmp/arg-file.txt');
+    await waitFor(() => expect(screen.getByText('arg-file.txt')).toBeTruthy());
+  });
+
+  it('should switch to existing tab if onOpenFileFromArgs fires with already-open file', async () => {
+    const existingSession = {
+      activeTabId: 'tab-existing',
+      tabs: [{
+        id: 'tab-existing',
+        title: 'existing.txt',
+        filePath: '/tmp/existing.txt',
+        content: 'old content',
+        isDirty: false,
+        eol: 'LF',
+      }],
+    };
+    (window as any).electronAPI.loadSession.mockResolvedValueOnce(existingSession);
+    (window as any).electronAPI.readFile = vi.fn().mockResolvedValue({
+      filePath: '/tmp/existing.txt', content: 'old content', eol: 'LF',
+    });
+    let capturedCallback: ((filePath: string) => void) | null = null;
+    (window as any).electronAPI.onOpenFileFromArgs = vi.fn((cb: (filePath: string) => void) => {
+      capturedCallback = cb;
+    });
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    );
+    await waitFor(() => screen.getByText('existing.txt'));
+    await waitFor(() => expect(capturedCallback).not.toBeNull());
+    const callsBefore = (window as any).electronAPI.readFile.mock.calls.length;
+    capturedCallback!('/tmp/existing.txt');
+    // readFile should NOT have been called again for an already-open file
+    await waitFor(() => expect((window as any).electronAPI.readFile.mock.calls.length).toBe(callsBefore));
   });
 
   it('should open a new tab when double-clicking the empty tab bar space', async () => {

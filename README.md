@@ -32,12 +32,23 @@ AwapiEditor is a fast, lightweight, universal text editor built specifically for
 
 ### Linux
 
+**Option 1 — AppImage (portable, no install required):**
+
 1. Download the latest `.AppImage` from the [Releases](https://github.com/awapi/awapi-editor/releases) page.
 2. Make it executable and run it:
    ```bash
    chmod +x AwapiEditor-*.AppImage
    ./AwapiEditor-*.AppImage
    ```
+
+**Option 2 — Debian/Ubuntu installer (`.deb`):**
+
+1. Download the latest `.deb` from the [Releases](https://github.com/awapi/awapi-editor/releases) page.
+2. Install it:
+   ```bash
+   sudo dpkg -i AwapiEditor-*.deb
+   ```
+3. Launch AwapiEditor from your application menu or run `awapi-editor` in a terminal.
 
 ---
 

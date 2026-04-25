@@ -31,11 +31,13 @@ const SAVE_DEBOUNCE_MS = 800;
  */
 export function useSessionPersistence(
   tabs: Array<{ id: string; title: string; filePath: string | null; content: string; isDirty?: boolean; language?: string; eol?: EolKind }>,
-  activeTabId: string | null
+  activeTabId: string | null,
+  enabled = true
 ): void {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const persist = useCallback(() => {
+    if (!enabled) return;
     const w = window as any;
     if (!w.electronAPI?.saveSession) return;
 
@@ -54,9 +56,10 @@ export function useSessionPersistence(
     };
 
     w.electronAPI.saveSession(session);
-  }, [tabs, activeTabId]);
+  }, [tabs, activeTabId, enabled]);
 
   useEffect(() => {
+    if (!enabled) return;
     if (saveTimerRef.current !== null) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(persist, SAVE_DEBOUNCE_MS);
 

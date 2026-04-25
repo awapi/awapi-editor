@@ -101,6 +101,22 @@ function createWindow() {
     },
   });
 
+  // Close all popout windows when the main window is closed.
+  mainWindow.on('close', () => {
+    for (const winId of popoutWindowIds) {
+      const win = BrowserWindow.fromId(winId);
+      win?.destroy();
+    }
+  });
+
+  // Handle Ctrl++ (Ctrl+Shift+=) for zoom in — the menu only registers Ctrl+=.
+  // before-input-event fires before Chromium or the menu processes the key.
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    const ctrl = input.control || input.meta;
+    if (!ctrl || input.type !== 'keyDown') return;
+    if (input.key === '+') adjustZoom(mainWindow!.webContents, +1);
+  });
+
   if (isDev) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173');
     mainWindow.webContents.openDevTools();
@@ -145,9 +161,10 @@ app.on('window-all-closed', () => {
 });
 
 // IPC Handlers
-ipcMain.handle('dialog:openFile', async () => {
-  if (!mainWindow) return null;
-  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+ipcMain.handle('dialog:openFile', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (!win) return null;
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
     properties: ['openFile'],
   });
   if (canceled || filePaths.length === 0) return null;
@@ -244,9 +261,10 @@ ipcMain.handle('settings:getDefaultDir', async () => {
   return app.getPath('userData');
 });
 
-ipcMain.handle('settings:openDirDialog', async () => {
-  if (!mainWindow) return null;
-  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+ipcMain.handle('settings:openDirDialog', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (!win) return null;
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
     properties: ['openDirectory', 'createDirectory'],
     title: 'Select Session Storage Folder',
   });
@@ -258,9 +276,10 @@ ipcMain.handle('settings:openInExplorer', async (_, dirPath: string) => {
   await shell.openPath(dirPath);
 });
 
-ipcMain.handle('dialog:confirmUnsavedChanges', async (_, tabTitle: string) => {
-  if (!mainWindow) return 'cancel';
-  const { response } = await dialog.showMessageBox(mainWindow, {
+ipcMain.handle('dialog:confirmUnsavedChanges', async (event, tabTitle: string) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (!win) return 'cancel';
+  const { response } = await dialog.showMessageBox(win, {
     type: 'warning',
     buttons: ['Save', "Don't Save", 'Cancel'],
     defaultId: 0,
@@ -306,12 +325,13 @@ ipcMain.handle('print:preview', async (_, content: string, _language: string, ti
   }
 });
 
-ipcMain.handle('dialog:saveFile', async (_, filePath: string, content: string, eol?: EolKind) => {
-  if (!mainWindow) return null;
+ipcMain.handle('dialog:saveFile', async (event, filePath: string, content: string, eol?: EolKind) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (!win) return null;
   let targetPath = filePath;
 
   if (!targetPath) {
-    const { canceled, filePath: newPath } = await dialog.showSaveDialog(mainWindow, {
+    const { canceled, filePath: newPath } = await dialog.showSaveDialog(win, {
       defaultPath: 'Untitled.txt',
     });
     if (canceled || !newPath) return null;
@@ -323,10 +343,157 @@ ipcMain.handle('dialog:saveFile', async (_, filePath: string, content: string, e
   return targetPath;
 });
 
+// ── Pop-out window ────────────────────────────────────────────────────────────
+interface PopoutTabData {
+  id: string;
+  title: string;
+  filePath: string | null;
+  content: string;
+  isDirty?: boolean;
+  language?: string;
+  eol?: EolKind;
+}
+
+// Holds tab data for each popout window until the renderer fetches it via
+// 'popout:get-data'. Keyed by BrowserWindow.id. Using a pull model (renderer
+// invokes) avoids the race condition where 'popout:init' was sent before
+// React's useEffect had registered its listener.
+const popoutDataMap = new Map<number, PopoutTabData>();
+
+// Tracks all currently open popout windows by id so we can close them when
+// the main window closes. (popoutDataMap entries are removed after data fetch,
+// so they can't be used for lifetime tracking.)
+const popoutWindowIds = new Set<number>();
+
+/** Builds a minimal menu for a single-file popout window.
+ *  - No New / Open / Quit — those belong to the main window only.
+ *  - "Close Window" closes only this popout.
+ */
+function buildPopoutMenu(win: Electron.BrowserWindow): Electron.Menu {
+  const wc = win.webContents;
+  const send = (ch: string) => wc.send(ch);
+
+  const popoutTemplate: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: 'File',
+      submenu: [
+        { label: 'Save',        accelerator: 'CmdOrCtrl+S',       click: () => send('menu:save') },
+        { label: 'Save As…',    accelerator: 'CmdOrCtrl+Shift+S', click: () => send('menu:saveAs') },
+        { type: 'separator' },
+        {
+          label: 'Print Preview…',
+          accelerator: 'CmdOrCtrl+Shift+P',
+          click: () => send('menu:printPreview'),
+        },
+        { type: 'separator' },
+        { label: 'Move to Main Window', accelerator: 'CmdOrCtrl+Shift+M', click: () => send('menu:moveToMain') },
+        { type: 'separator' },
+        { label: 'Close Window', accelerator: 'CmdOrCtrl+W', click: () => win.close() },
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' as const },
+        { role: 'redo' as const },
+        { type: 'separator' as const },
+        { role: 'cut' as const },
+        { role: 'copy' as const },
+        { role: 'paste' as const },
+        { type: 'separator' as const },
+        { label: 'Find…',           accelerator: 'CmdOrCtrl+F',   click: () => send('menu:find') },
+        { label: 'Replace…',        accelerator: 'CmdOrCtrl+H',   click: () => send('menu:replace') },
+        { type: 'separator' as const },
+        { label: 'Format Document', accelerator: 'Shift+Alt+F',   click: () => send('menu:format') },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { label: 'Zoom In',    accelerator: 'CmdOrCtrl+=', click: () => adjustZoom(wc, +1) },
+        { label: 'Zoom Out',   accelerator: 'CmdOrCtrl+-', click: () => adjustZoom(wc, -1) },
+        { label: 'Reset Zoom', accelerator: 'CmdOrCtrl+0', click: () => resetZoom(wc) },
+      ],
+    },
+  ];
+
+  return Menu.buildFromTemplate(popoutTemplate);
+}
+
+ipcMain.handle('window:popout', async (_event, tabData: PopoutTabData) => {
+  const popoutWin = new BrowserWindow({
+    width: 900,
+    height: 700,
+    title: tabData.title,
+    icon: join(__dirname, '../../build/icon.png'),
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  // Give the popout its own trimmed menu (no Quit, no New/Open, no Preferences).
+  popoutWin.setMenu(buildPopoutMenu(popoutWin));
+
+  // Store the tab data; the renderer will fetch it via 'popout:get-data' once mounted.
+  popoutDataMap.set(popoutWin.id, tabData);
+  popoutWindowIds.add(popoutWin.id);
+  // Capture the webContents id now — by the time 'closed' fires the webContents
+  // is already destroyed and accessing popoutWin.webContents.id would throw.
+  const popoutWcId = popoutWin.webContents.id;
+  popoutWin.on('closed', () => {
+    popoutDataMap.delete(popoutWin.id);
+    popoutWindowIds.delete(popoutWin.id);
+    zoomLevels.delete(popoutWcId);
+  });
+
+  // Handle Ctrl++ (Ctrl+Shift+=) for zoom in — the menu only registers Ctrl+=.
+  popoutWin.webContents.on('before-input-event', (_event, input) => {
+    const ctrl = input.control || input.meta;
+    if (!ctrl || input.type !== 'keyDown') return;
+    if (input.key === '+') adjustZoom(popoutWin.webContents, +1);
+  });
+
+  if (isDev) {
+    await popoutWin.loadURL((process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173') + '#popout');
+  } else {
+    await popoutWin.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'popout' });
+  }
+});
+
+// Renderer calls this from useEffect (after mount) to retrieve its tab data.
+// Pull model guarantees the listener is always ready before the request.
+ipcMain.handle('popout:get-data', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return null;
+  const data = popoutDataMap.get(win.id) ?? null;
+  popoutDataMap.delete(win.id);
+  return data;
+});
+
+ipcMain.handle('window:moveToMain', (event, tabData: PopoutTabData) => {
+  mainWindow?.webContents.send('menu:addTab', tabData);
+  BrowserWindow.fromWebContents(event.sender)?.close();
+});
+
 // Setup primitive app menu (can be fleshed out later)
 import { Menu } from 'electron';
 
-let zoomLevel = 0;
+// Per-webContents zoom level (keyed by webContents.id) so each window zooms independently.
+const zoomLevels = new Map<number, number>();
+
+function adjustZoom(wc: Electron.WebContents, delta: number): void {
+  const current = zoomLevels.get(wc.id) ?? 0;
+  const next = Math.max(-9, Math.min(9, current + delta));
+  zoomLevels.set(wc.id, next);
+  wc.setZoomLevel(next);
+}
+
+function resetZoom(wc: Electron.WebContents): void {
+  zoomLevels.set(wc.id, 0);
+  wc.setZoomLevel(0);
+}
 
 const isMac = process.platform === 'darwin';
 
@@ -356,10 +523,11 @@ const template: Electron.MenuItemConstructorOptions[] = [
   {
     label: 'File',
     submenu: [
-      { label: 'New', accelerator: 'CmdOrCtrl+N', click: () => mainWindow?.webContents.send('menu:new') },
-      { label: 'Open', accelerator: 'CmdOrCtrl+O', click: () => mainWindow?.webContents.send('menu:open') },
-      { label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => mainWindow?.webContents.send('menu:save') },
-      { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: () => mainWindow?.webContents.send('menu:saveAs') },
+      { label: 'New', accelerator: 'CmdOrCtrl+N', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:new') },
+      { label: 'Open', accelerator: 'CmdOrCtrl+O', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:open') },
+      { label: 'Save', accelerator: 'CmdOrCtrl+S', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:save') },
+      { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:saveAs') },
+      { label: 'Pop Out to New Window', accelerator: 'CmdOrCtrl+Shift+N', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:popoutActiveTab') },
       { type: 'separator' },
       {
         label: 'Preferences…',
@@ -370,7 +538,7 @@ const template: Electron.MenuItemConstructorOptions[] = [
       {
         label: 'Print Preview…',
         accelerator: 'CmdOrCtrl+Shift+P',
-        click: () => { mainWindow?.webContents.send('menu:printPreview'); }
+        click: (_item, win) => { (win ?? mainWindow)?.webContents.send('menu:printPreview'); }
       },
       {
         label: 'Print…', accelerator: 'CmdOrCtrl+P', click: async () => {
@@ -401,18 +569,20 @@ const template: Electron.MenuItemConstructorOptions[] = [
       { role: 'copy' },
       { role: 'paste' },
       { type: 'separator' },
-      { label: 'Find...', accelerator: 'CmdOrCtrl+F', click: () => mainWindow?.webContents.send('menu:find') },
-      { label: 'Replace...', accelerator: 'CmdOrCtrl+H', click: () => mainWindow?.webContents.send('menu:replace') },
+      { label: 'Find...', accelerator: 'CmdOrCtrl+F', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:find') },
+      { label: 'Replace...', accelerator: 'CmdOrCtrl+H', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:replace') },
       { type: 'separator' },
-      { label: 'Format Document', accelerator: 'Shift+Alt+F', click: () => mainWindow?.webContents.send('menu:format') },
+      { label: 'Format Document', accelerator: 'Shift+Alt+F', click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:format') },
     ]
   },
   {
     label: 'View',
     submenu: [
-      { label: 'Zoom In',    accelerator: 'CmdOrCtrl+=', click: () => { zoomLevel = Math.min(zoomLevel + 1, 9);  mainWindow?.webContents.setZoomLevel(zoomLevel); } },
-      { label: 'Zoom Out',   accelerator: 'CmdOrCtrl+-', click: () => { zoomLevel = Math.max(zoomLevel - 1, -9); mainWindow?.webContents.setZoomLevel(zoomLevel); } },
-      { label: 'Reset Zoom', accelerator: 'CmdOrCtrl+0', click: () => { zoomLevel = 0; mainWindow?.webContents.setZoomLevel(0); } },
+      { label: 'Zoom In',    accelerator: 'CmdOrCtrl+=', click: (_item, win) => adjustZoom((win ?? mainWindow)!.webContents, +1) },
+      { label: 'Zoom Out',   accelerator: 'CmdOrCtrl+-', click: (_item, win) => adjustZoom((win ?? mainWindow)!.webContents, -1) },
+      { label: 'Reset Zoom', accelerator: 'CmdOrCtrl+0', click: (_item, win) => resetZoom((win ?? mainWindow)!.webContents) },
+      { type: 'separator' },
+      { label: 'Pop Out Active Tab to New Window', accelerator: 'CmdOrCtrl+Shift+N', click: () => mainWindow?.webContents.send('menu:popoutActiveTab') },
       { type: 'separator' },
       { role: 'reload' },
       { role: 'toggleDevTools' },
@@ -424,7 +594,7 @@ const template: Electron.MenuItemConstructorOptions[] = [
       {
         label: 'Show All Commands',
         accelerator: 'F1',
-        click: () => mainWindow?.webContents.send('menu:showAllCommands')
+        click: (_item, win) => (win ?? mainWindow)?.webContents.send('menu:showAllCommands')
       },
       { type: 'separator' },
       {

@@ -114,6 +114,13 @@ describe('useSessionPersistence', () => {
     }).not.toThrow();
     expect(mockSaveSession).not.toHaveBeenCalled();
   });
+
+  it('does not save when enabled is false (popout mode)', () => {
+    const tabs = [{ id: '1', title: 'Untitled', filePath: null, content: 'hello', isDirty: true }];
+    renderHook(() => useSessionPersistence(tabs, '1', false));
+    act(() => { vi.advanceTimersByTime(800); });
+    expect(mockSaveSession).not.toHaveBeenCalled();
+  });
 });
 
 // workaround: variable needed to satisfy TypeScript for destructured prop type

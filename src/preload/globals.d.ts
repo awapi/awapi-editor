@@ -50,7 +50,46 @@ declare global {
       onOpenSettings: (callback: () => void) => void;
       onShowAllCommands: (callback: () => void) => void;
       printPreview: (content: string, language: string, title: string) => Promise<void>;
-      
+
+      onPopoutActiveTab: (callback: () => void) => void;
+      popoutTab: (tabData: {
+        id: string;
+        title: string;
+        filePath: string | null;
+        content: string;
+        isDirty?: boolean;
+        language?: string;
+        eol?: 'LF' | 'CRLF';
+      }) => Promise<void>;
+      getPopoutData: () => Promise<{
+        id: string;
+        title: string;
+        filePath: string | null;
+        content: string;
+        isDirty?: boolean;
+        language?: string;
+        eol?: 'LF' | 'CRLF';
+      } | null>;
+      moveToMain: (tabData: {
+        id: string;
+        title: string;
+        filePath: string | null;
+        content: string;
+        isDirty?: boolean;
+        language?: string;
+        eol?: 'LF' | 'CRLF';
+      }) => Promise<void>;
+      onMoveToMain: (callback: () => void) => void;
+      onAddTab: (callback: (tabData: {
+        id: string;
+        title: string;
+        filePath: string | null;
+        content: string;
+        isDirty?: boolean;
+        language?: string;
+        eol?: 'LF' | 'CRLF';
+      }) => void) => void;
+
       removeListeners: () => void;
     };
   }

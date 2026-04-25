@@ -19,10 +19,15 @@ describe('Editor Core Tests', () => {
       onOpenSettings: vi.fn(),
       onShowAllCommands: vi.fn(),
       onOpenFileFromArgs: vi.fn(),
+      onPopoutActiveTab: vi.fn(),
       removeListeners: vi.fn(),
       readFile: vi.fn().mockResolvedValue({ filePath: '/mock/path/file.txt', content: 'mock content' }),
       saveSession: vi.fn().mockResolvedValue(true),
       loadSession: vi.fn().mockResolvedValue(null), // no previous session by default
+      getPopoutData: vi.fn().mockResolvedValue(null),
+      moveToMain: vi.fn().mockResolvedValue(undefined),
+      onMoveToMain: vi.fn(),
+      onAddTab: vi.fn(),
     };
   });
 
@@ -235,6 +240,168 @@ describe('Editor Core Tests', () => {
       fireEvent.click(getCloseButton());
       await waitFor(() => expect((window as any).electronAPI.saveFileDialog).toHaveBeenCalled());
       expect(screen.getByText(/dirty\.txt/)).toBeTruthy();
+    });
+  });
+
+  describe('tab tooltip (title attribute)', () => {
+    it('shows the full file path as a tooltip on a saved tab', async () => {
+      const session = {
+        activeTabId: 'tab-1',
+        tabs: [{
+          id: 'tab-1',
+          title: 'notes.txt',
+          filePath: '/home/user/documents/notes.txt',
+          content: '',
+          isDirty: false,
+          eol: 'LF',
+        }],
+      };
+      (window as any).electronAPI.loadSession.mockResolvedValueOnce(session);
+      (window as any).electronAPI.readFile = vi.fn().mockResolvedValue({
+        filePath: '/home/user/documents/notes.txt',
+        content: '',
+        eol: 'LF',
+      });
+      render(
+        <ThemeProvider>
+          <App />
+        </ThemeProvider>
+      );
+      await waitFor(() => screen.getByText('notes.txt'));
+      const tab = screen.getByText('notes.txt').closest('div[draggable]') as HTMLElement;
+      expect(tab).toBeTruthy();
+      expect(tab.title).toBe('/home/user/documents/notes.txt');
+    });
+
+    it('does not set a tooltip on an Untitled tab', async () => {
+      render(
+        <ThemeProvider>
+          <App />
+        </ThemeProvider>
+      );
+      await waitFor(() => screen.getByText('Untitled'));
+      const tab = screen.getByText('Untitled').closest('div[draggable]') as HTMLElement;
+      expect(tab).toBeTruthy();
+      expect(tab.title).toBeFalsy();
+    });
+  });
+
+  describe('pop-out to new window', () => {
+    const makeSession = () => ({
+      activeTabId: 'tab-1',
+      tabs: [
+        { id: 'tab-1', title: 'alpha.txt', filePath: '/tmp/alpha.txt', content: 'aaa', isDirty: false, eol: 'LF' },
+        { id: 'tab-2', title: 'beta.txt',  filePath: '/tmp/beta.txt',  content: 'bbb', isDirty: false, eol: 'LF' },
+      ],
+    });
+
+    beforeEach(() => {
+      (window as any).electronAPI.popoutTab = vi.fn().mockResolvedValue(undefined);
+      (window as any).electronAPI.loadSession.mockResolvedValue(makeSession());
+      (window as any).electronAPI.readFile = vi.fn().mockImplementation(async (fp: string) => ({
+        filePath: fp,
+        content: fp.includes('alpha') ? 'aaa' : 'bbb',
+        eol: 'LF',
+      }));
+    });
+
+    it('shows context menu on tab right-click', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+
+      const tab = screen.getByText('alpha.txt').closest('div[draggable]') as HTMLElement;
+      fireEvent.contextMenu(tab);
+
+      expect(screen.getByTestId('tab-context-menu')).toBeTruthy();
+      expect(screen.getByTestId('tab-context-popout')).toBeTruthy();
+    });
+
+    it('dismisses context menu when clicking the backdrop', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+
+      const tab = screen.getByText('alpha.txt').closest('div[draggable]') as HTMLElement;
+      fireEvent.contextMenu(tab);
+      expect(screen.getByTestId('tab-context-menu')).toBeTruthy();
+
+      fireEvent.click(screen.getByTestId('tab-context-menu-backdrop'));
+      expect(screen.queryByTestId('tab-context-menu')).toBeNull();
+    });
+
+    it('calls popoutTab with tab data and removes tab from list', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+      await waitFor(() => screen.getByText('beta.txt'));
+
+      const tab = screen.getByText('alpha.txt').closest('div[draggable]') as HTMLElement;
+      fireEvent.contextMenu(tab);
+      fireEvent.click(screen.getByTestId('tab-context-popout'));
+
+      await waitFor(() => expect(screen.queryByText('alpha.txt')).toBeNull());
+      expect(screen.getByText('beta.txt')).toBeTruthy();
+      expect((window as any).electronAPI.popoutTab).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'tab-1', title: 'alpha.txt' })
+      );
+    });
+
+    it('hides context menu after pop-out action', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+
+      const tab = screen.getByText('alpha.txt').closest('div[draggable]') as HTMLElement;
+      fireEvent.contextMenu(tab);
+      fireEvent.click(screen.getByTestId('tab-context-popout'));
+
+      await waitFor(() => expect(screen.queryByTestId('tab-context-menu')).toBeNull());
+    });
+  });
+
+  describe('move to main window (onAddTab)', () => {
+    it('adds a new tab when onAddTab fires', async () => {
+      let addTabCallback: ((tabData: unknown) => void) | null = null;
+      (window as any).electronAPI.onAddTab = vi.fn((cb: (tabData: unknown) => void) => {
+        addTabCallback = cb;
+      });
+      (window as any).electronAPI.loadSession.mockResolvedValue(null);
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByTestId('status-bar'));
+
+      const incomingTab = {
+        id: 'popout-tab-1',
+        title: 'popped.txt',
+        filePath: '/tmp/popped.txt',
+        content: 'hello',
+        isDirty: false,
+        eol: 'LF' as const,
+      };
+      await waitFor(() => expect(addTabCallback).not.toBeNull());
+      addTabCallback!(incomingTab);
+
+      await waitFor(() => expect(screen.getByText('popped.txt')).toBeTruthy());
+    });
+
+    it('does not duplicate a tab already present when onAddTab fires', async () => {
+      let addTabCallback: ((tabData: unknown) => void) | null = null;
+      (window as any).electronAPI.onAddTab = vi.fn((cb: (tabData: unknown) => void) => {
+        addTabCallback = cb;
+      });
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [{ id: 'tab-1', title: 'existing.txt', filePath: '/tmp/existing.txt', content: 'x', isDirty: false, eol: 'LF' }],
+      });
+      (window as any).electronAPI.readFile = vi.fn().mockResolvedValue({
+        filePath: '/tmp/existing.txt', content: 'x', eol: 'LF',
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('existing.txt'));
+
+      await waitFor(() => expect(addTabCallback).not.toBeNull());
+      addTabCallback!({ id: 'tab-1', title: 'existing.txt', filePath: '/tmp/existing.txt', content: 'x', isDirty: false, eol: 'LF' });
+
+      // Only one tab with this title
+      expect(screen.getAllByText('existing.txt').length).toBe(1);
     });
   });
 });

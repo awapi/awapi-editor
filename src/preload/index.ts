@@ -32,6 +32,17 @@ export const electronAPI = {
   printPreview: (content: string, language: string, title: string) =>
     ipcRenderer.invoke('print:preview', content, language, title),
 
+  // Pop-out: move a tab to a new standalone window
+  popoutTab: (tabData: unknown) => ipcRenderer.invoke('window:popout', tabData),
+  onPopoutActiveTab: (callback: () => void) => ipcRenderer.on('menu:popoutActiveTab', () => callback()),
+  // Pull model: renderer calls this from useEffect to avoid the race condition
+  // where a push ('popout:init') could arrive before the listener was registered.
+  getPopoutData: () => ipcRenderer.invoke('popout:get-data'),
+  // Move tab back from popout to main window
+  moveToMain: (tabData: unknown) => ipcRenderer.invoke('window:moveToMain', tabData),
+  onMoveToMain: (callback: () => void) => ipcRenderer.on('menu:moveToMain', () => callback()),
+  onAddTab: (callback: (tabData: unknown) => void) => ipcRenderer.on('menu:addTab', (_, tabData) => callback(tabData)),
+
   // Cleanup listeners
   removeListeners: () => {
     ipcRenderer.removeAllListeners('menu:new');
@@ -47,6 +58,9 @@ export const electronAPI = {
     ipcRenderer.removeAllListeners('menu:openSettings');
     ipcRenderer.removeAllListeners('menu:showAllCommands');
     ipcRenderer.removeAllListeners('file:openFromArgs');
+    ipcRenderer.removeAllListeners('menu:popoutActiveTab');
+    ipcRenderer.removeAllListeners('menu:moveToMain');
+    ipcRenderer.removeAllListeners('menu:addTab');
   }
 };
 

@@ -9,6 +9,9 @@ import SettingsModal from './SettingsModal';
 import type { EolKind } from './lineEndings';
 import { inferLanguageFromFilename } from './languages';
 
+/** True when this window was opened via "Pop out to new window" (single-file view). */
+const isPopoutMode = typeof window !== 'undefined' && window.location.hash === '#popout';
+
 interface Tab {
   id: string;
   title: string;
@@ -28,6 +31,7 @@ const App: React.FC = () => {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [wordWrap, setWordWrap] = useState<boolean>(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [tabContextMenu, setTabContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
   const editorRef = React.useRef<any>(null);
 
   const addNewTab = () => {
@@ -54,8 +58,8 @@ const App: React.FC = () => {
     activeTabIdRef.current = activeTabId;
   }, [tabs, activeTabId]);
 
-  // Auto-save session whenever tabs or active tab changes
-  useSessionPersistence(tabs, activeTabId);
+  // Auto-save session whenever tabs or active tab changes (disabled in popout windows)
+  useSessionPersistence(tabs, activeTabId, !isPopoutMode);
 
   useEffect(() => {
     // Session restore is a one-shot operation: guard it so React StrictMode's
@@ -66,6 +70,19 @@ const App: React.FC = () => {
     if (!initDoneRef.current) {
       initDoneRef.current = true;
 
+      if (isPopoutMode) {
+        // Pull tab data from the main process now that the component is mounted.
+        // Using invoke (pull) instead of a push event avoids the race condition
+        // where the renderer wasn't ready to receive when the window first loaded.
+        (async () => {
+          const w = window as any;
+          const tabData: Tab | null = await w.electronAPI?.getPopoutData?.();
+          if (tabData) {
+            setTabs([tabData]);
+            setActiveTabId(tabData.id);
+          }
+        })();
+      } else {
       // Restore previous session, or open a blank tab if none exists
       (async () => {
         const w = window as any;
@@ -105,6 +122,7 @@ const App: React.FC = () => {
           addNewTab();
         }
       })();
+      } // end else (non-popout)
     }
 
     // Listen to IPC
@@ -225,6 +243,31 @@ const App: React.FC = () => {
           editorRef.current.trigger('keyboard', 'editor.action.quickCommand', {});
         }
       });
+
+      w.electronAPI.onPopoutActiveTab(() => {
+        const id = activeTabIdRef.current;
+        if (id) handlePopout(id);
+      });
+
+      if (isPopoutMode) {
+        // Popout: move this tab back to the main window
+        w.electronAPI.onMoveToMain(() => {
+          const tab = tabsRef.current[0];
+          if (!tab) return;
+          const content = editorRef.current?.getValue() ?? tab.content;
+          w.electronAPI.moveToMain({ ...tab, content });
+        });
+      } else {
+        // Main: receive a tab being moved back from a popout
+        w.electronAPI.onAddTab((tabData: Tab) => {
+          setTabs(prev => {
+            const exists = prev.some(t => t.id === tabData.id);
+            if (exists) return prev;
+            return [...prev, tabData];
+          });
+          setActiveTabId(tabData.id);
+        });
+      }
 
       w.electronAPI.onOpenFileFromArgs(async (filePath: string) => {
         try {
@@ -364,6 +407,23 @@ const App: React.FC = () => {
     }
   };
 
+  const handlePopout = (tabId: string) => {
+    const tab = tabsRef.current.find(t => t.id === tabId);
+    if (!tab) return;
+    const w = window as any;
+    if (w.electronAPI?.popoutTab) {
+      w.electronAPI.popoutTab(tab);
+    }
+    const newTabs = tabsRef.current.filter(t => t.id !== tabId);
+    setTabs(newTabs);
+    if (activeTabIdRef.current === tabId) {
+      const idx = tabsRef.current.findIndex(t => t.id === tabId);
+      const next = newTabs[idx] ?? newTabs[idx - 1] ?? newTabs[0] ?? null;
+      setActiveTabId(next?.id ?? null);
+    }
+    setTabContextMenu(null);
+  };
+
   const activeTab = tabs.find(t => t.id === activeTabId);
 
   const inferredLanguage = activeTab ? inferLanguageFromFilename(activeTab.filePath ?? activeTab.title) : 'plaintext';
@@ -431,7 +491,8 @@ const App: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: colors.background, color: colors.foreground }}>
-      {/* Tab Bar: outer row never scrolls so the right-side action group stays pinned. */}
+      {/* Tab Bar: hidden in popout (single-file) mode */}
+      {!isPopoutMode && (
       <div style={{ display: 'flex', backgroundColor: colors.tabBackground, flexShrink: 0 }}>
         {/* Scrollable tab strip. minWidth:0 is required so this flex child can
             shrink below its content width instead of pushing siblings off-screen. */}
@@ -447,10 +508,12 @@ const App: React.FC = () => {
                 if (tab.id === activeTabId) activeTabElRef.current = el;
               }}
               draggable
+              title={tab.filePath ?? undefined}
               onDragStart={(e) => handleDragStart(e, index)}
               onDragOver={handleDragOver}
               onDrop={(e) => handleDrop(e, index)}
               onClick={() => setActiveTabId(tab.id)}
+              onContextMenu={(e) => { e.preventDefault(); setTabContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY }); }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -535,6 +598,35 @@ const App: React.FC = () => {
           </button>
         </div>
       </div>
+      )} {/* end !isPopoutMode tab bar */}
+
+      {/* Popout title strip — shown instead of the tab bar in single-file windows */}
+      {isPopoutMode && activeTab && (
+        <div
+          data-testid="popout-title-bar"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            padding: '6px 14px',
+            backgroundColor: colors.tabBackground,
+            borderBottom: `1px solid ${colors.tabHover}`,
+            flexShrink: 0,
+            fontSize: '13px',
+            color: activeTab.isDirty ? '#e2c08d' : colors.foreground,
+            userSelect: 'none',
+          }}
+        >
+          {activeTab.title}{activeTab.isDirty && ' *'}
+          {activeTab.filePath && (
+            <span
+              style={{ marginLeft: 10, opacity: 0.5, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={activeTab.filePath}
+            >
+              {activeTab.filePath}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Editor Area */}
       <div style={{ flexGrow: 1, overflow: 'hidden' }}>
@@ -567,6 +659,56 @@ const App: React.FC = () => {
       </div>
 
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+
+      {/* Tab context menu */}
+      {tabContextMenu && (
+        <>
+          {/* Invisible backdrop to close menu on outside click */}
+          <div
+            data-testid="tab-context-menu-backdrop"
+            style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
+            onClick={() => setTabContextMenu(null)}
+          />
+          <div
+            data-testid="tab-context-menu"
+            role="menu"
+            style={{
+              position: 'fixed',
+              top: tabContextMenu.y,
+              left: tabContextMenu.x,
+              zIndex: 9999,
+              backgroundColor: colors.background,
+              border: `1px solid ${colors.tabHover}`,
+              borderRadius: '4px',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+              minWidth: '180px',
+              padding: '4px 0',
+            }}
+          >
+            <div
+              role="menuitem"
+              data-testid="tab-context-popout"
+              onClick={() => handlePopout(tabContextMenu.tabId)}
+              onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+              style={{
+                padding: '7px 16px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                color: colors.foreground,
+                backgroundColor: 'transparent',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '24px',
+              }}
+            >
+              <span>Pop out to new window</span>
+              <span style={{ opacity: 0.45, fontSize: '11px', flexShrink: 0 }}>Ctrl+Shift+N</span>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Status Bar */}
       <div

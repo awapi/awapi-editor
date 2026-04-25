@@ -312,7 +312,7 @@ const template: Electron.MenuItemConstructorOptions[] = [
             dialog.showErrorBox('No Printer Found', 'No printers are installed or available on this system.');
             return;
           }
-          const defaultPrinter = printers.find(p => p.isDefault) ?? printers[0];
+          const defaultPrinter = printers.find(p => (p as Electron.PrinterInfo & { isDefault?: boolean }).isDefault) ?? printers[0];
           mainWindow.webContents.print(
             { silent: false, printBackground: true, deviceName: defaultPrinter.name },
             (success, failureReason) => { if (!success) console.error('Print failed:', failureReason); }

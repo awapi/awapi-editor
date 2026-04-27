@@ -6,6 +6,8 @@ export const electronAPI = {
     ipcRenderer.invoke('dialog:saveFile', filePath, content, eol),
   confirmUnsavedChanges: (tabTitle: string) => ipcRenderer.invoke('dialog:confirmUnsavedChanges', tabTitle) as Promise<'save' | 'dont-save' | 'cancel'>,
   readFile: (filePath: string) => ipcRenderer.invoke('file:read', filePath),
+  renameFile: (oldPath: string, newName: string) =>
+    ipcRenderer.invoke('file:rename', oldPath, newName) as Promise<{ ok: true; newPath: string } | { ok: false; error: string }>,
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
 
   saveSession: (session: unknown) => ipcRenderer.invoke('session:save', session),

@@ -66,6 +66,21 @@ describe('useSessionPersistence', () => {
     expect(call.tabs[0].content).toBe('modified');
   });
 
+  it('persists per-tab themeOverride when set', () => {
+    const tabs = [
+      { id: '1', title: 'a.txt', filePath: '/a.txt', content: '', isDirty: false, themeOverride: 'dark' as const },
+      { id: '2', title: 'b.txt', filePath: '/b.txt', content: '', isDirty: false, themeOverride: 'light' as const },
+      { id: '3', title: 'c.txt', filePath: '/c.txt', content: '', isDirty: false },
+    ];
+    renderHook(() => useSessionPersistence(tabs, '1'));
+    act(() => { vi.advanceTimersByTime(800); });
+
+    const call = mockSaveSession.mock.calls[0][0] as SessionData;
+    expect(call.tabs[0].themeOverride).toBe('dark');
+    expect(call.tabs[1].themeOverride).toBe('light');
+    expect(call.tabs[2].themeOverride).toBeUndefined();
+  });
+
   it('debounces multiple rapid changes into a single save', () => {
     const { rerender } = renderHook(
       ({ tabs, active }: { tabs: typeof initialTabs; active: string }) =>

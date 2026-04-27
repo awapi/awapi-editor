@@ -23,6 +23,9 @@ interface Tab {
   language?: string;
   /** Line-ending sequence used when saving the tab's content. Defaults to LF. */
   eol?: EolKind;
+  /** Per-tab editor theme override. When undefined, the global theme is used.
+   *  Only affects the Monaco editor surface, not the surrounding chrome. */
+  themeOverride?: 'light' | 'dark';
 }
 
 const App: React.FC = () => {
@@ -32,6 +35,9 @@ const App: React.FC = () => {
   const [wordWrap, setWordWrap] = useState<boolean>(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [tabContextMenu, setTabContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
+  const [renameTarget, setRenameTarget] = useState<{ tabId: string; currentName: string } | null>(null);
+  const [renameInput, setRenameInput] = useState('');
+  const [renameError, setRenameError] = useState<string | null>(null);
   const editorRef = React.useRef<any>(null);
 
   const addNewTab = () => {
@@ -366,38 +372,50 @@ const App: React.FC = () => {
     ));
   };
 
+  /**
+   * Prompts the user for unsaved-change resolution on a single tab.
+   * Returns true if the tab is safe to close, false if the user cancelled
+   * (or saving failed).
+   */
+  const confirmCloseTab = async (tab: Tab): Promise<boolean> => {
+    if (!tab.isDirty) return true;
+
+    const w = window as any;
+    // Fallback to window.confirm if native dialog IPC is unavailable (e.g. tests).
+    let choice: 'save' | 'dont-save' | 'cancel';
+    if (w.electronAPI?.confirmUnsavedChanges) {
+      choice = await w.electronAPI.confirmUnsavedChanges(tab.title);
+    } else {
+      const ok = typeof window.confirm === 'function'
+        ? window.confirm(`Discard unsaved changes to ${tab.title}?`)
+        : true;
+      choice = ok ? 'dont-save' : 'cancel';
+    }
+
+    if (choice === 'cancel') return false;
+
+    if (choice === 'save') {
+      if (!w.electronAPI?.saveFileDialog) return false;
+      try {
+        const savedPath = await w.electronAPI.saveFileDialog(tab.filePath, tab.content, tab.eol ?? 'LF');
+        if (!savedPath) return false; // Save dialog cancelled – abort close
+      } catch (err) {
+        console.error('Error saving file during close', err);
+        return false;
+      }
+    }
+
+    return true;
+  };
+
   const closeTab = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
 
     const tab = tabs.find(t => t.id === id);
     if (!tab) return;
 
-    if (tab.isDirty) {
-      const w = window as any;
-      // Fallback to window.confirm if native dialog IPC is unavailable (e.g. tests).
-      let choice: 'save' | 'dont-save' | 'cancel';
-      if (w.electronAPI?.confirmUnsavedChanges) {
-        choice = await w.electronAPI.confirmUnsavedChanges(tab.title);
-      } else {
-        const ok = typeof window.confirm === 'function'
-          ? window.confirm(`Discard unsaved changes to ${tab.title}?`)
-          : true;
-        choice = ok ? 'dont-save' : 'cancel';
-      }
-
-      if (choice === 'cancel') return;
-
-      if (choice === 'save') {
-        if (!w.electronAPI?.saveFileDialog) return;
-        try {
-          const savedPath = await w.electronAPI.saveFileDialog(tab.filePath, tab.content, tab.eol ?? 'LF');
-          if (!savedPath) return; // Save dialog cancelled – abort close
-        } catch (err) {
-          console.error('Error saving file during close', err);
-          return;
-        }
-      }
-    }
+    const proceed = await confirmCloseTab(tab);
+    if (!proceed) return;
 
     const newTabs = tabs.filter(t => t.id !== id);
     setTabs(newTabs);
@@ -405,6 +423,124 @@ const App: React.FC = () => {
     if (activeTabId === id) {
       setActiveTabId(newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null);
     }
+  };
+
+  /**
+   * Closes a set of tabs, prompting the user about unsaved changes for each
+   * one. Tabs the user chooses to keep (via Cancel) remain open. Used by the
+   * "Close Other Tabs" and "Close All Tabs" context-menu actions.
+   */
+  const closeTabsByIds = async (idsToClose: string[]) => {
+    const targets = tabsRef.current.filter(t => idsToClose.includes(t.id));
+    const closedIds: string[] = [];
+
+    for (const tab of targets) {
+      // eslint-disable-next-line no-await-in-loop
+      const ok = await confirmCloseTab(tab);
+      if (ok) closedIds.push(tab.id);
+    }
+
+    if (closedIds.length === 0) return;
+
+    const remaining = tabsRef.current.filter(t => !closedIds.includes(t.id));
+    setTabs(remaining);
+
+    const currentActive = activeTabIdRef.current;
+    if (currentActive && closedIds.includes(currentActive)) {
+      setActiveTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
+    }
+  };
+
+  const handleCloseTabFromMenu = async (id: string) => {
+    setTabContextMenu(null);
+    await closeTabsByIds([id]);
+  };
+
+  const handleCloseOtherTabs = async (keepId: string) => {
+    setTabContextMenu(null);
+    const others = tabsRef.current.filter(t => t.id !== keepId).map(t => t.id);
+    await closeTabsByIds(others);
+  };
+
+  const handleCloseAllTabs = async () => {
+    setTabContextMenu(null);
+    const all = tabsRef.current.map(t => t.id);
+    await closeTabsByIds(all);
+  };
+
+  /**
+   * Opens the inline rename modal for the given tab. The tab must already be
+   * backed by a real file on disk — untitled / unsaved tabs cannot be renamed
+   * (use Save As instead).
+   */
+  const handleRenameTab = (tabId: string) => {
+    setTabContextMenu(null);
+    const tab = tabsRef.current.find(t => t.id === tabId);
+    if (!tab || !tab.filePath) return;
+    setRenameTarget({ tabId, currentName: tab.title });
+    setRenameInput(tab.title);
+    setRenameError(null);
+  };
+
+  const closeRenameModal = () => {
+    setRenameTarget(null);
+    setRenameInput('');
+    setRenameError(null);
+  };
+
+  const submitRename = async () => {
+    if (!renameTarget) return;
+    const tab = tabsRef.current.find(t => t.id === renameTarget.tabId);
+    if (!tab || !tab.filePath) {
+      setRenameError('This tab is not backed by a file on disk.');
+      return;
+    }
+
+    const newName = renameInput.trim();
+    if (!newName) {
+      setRenameError('Name cannot be empty.');
+      return;
+    }
+    if (/[\\/]/.test(newName)) {
+      setRenameError('Name cannot contain path separators.');
+      return;
+    }
+    if (newName === tab.title) {
+      closeRenameModal();
+      return;
+    }
+
+    const w = window as any;
+    if (!w.electronAPI?.renameFile) {
+      setRenameError('Rename is not available in this environment.');
+      return;
+    }
+
+    const result = await w.electronAPI.renameFile(tab.filePath, newName);
+    if (!result?.ok) {
+      setRenameError(result?.error ?? 'Failed to rename file.');
+      return;
+    }
+
+    setTabs(prev =>
+      prev.map(t =>
+        t.id === renameTarget.tabId
+          ? { ...t, title: newName, filePath: result.newPath }
+          : t
+      )
+    );
+    closeRenameModal();
+  };
+
+  /**
+   * Sets (or clears) a per-tab theme override. Pass null to clear the override
+   * and let the tab follow the global theme again.
+   */
+  const handleSetTabTheme = (tabId: string, theme: 'light' | 'dark' | null) => {
+    setTabContextMenu(null);
+    setTabs(prev => prev.map(t =>
+      t.id === tabId ? { ...t, themeOverride: theme ?? undefined } : t
+    ));
   };
 
   const handlePopout = (tabId: string) => {
@@ -480,6 +616,26 @@ const App: React.FC = () => {
   // Keep the active tab visible when it changes or when tabs are added/removed.
   const tabStripRef = React.useRef<HTMLDivElement>(null);
   const activeTabElRef = React.useRef<HTMLDivElement | null>(null);
+
+  /** Background colour for a tab/editor surface, honouring per-tab theme override. */
+  const surfaceBgFor = (override: 'light' | 'dark' | undefined) =>
+    override === 'light' ? '#fffffe'
+    : override === 'dark' ? '#1e1e1e'
+    : colors.tabActiveBackground;
+
+  /** Slightly dimmed variant of `surfaceBgFor`, used for inactive themed tabs
+   *  so the override is still visible but distinguishable from the active tab. */
+  const surfaceBgInactiveFor = (override: 'light' | 'dark' | undefined) =>
+    override === 'light' ? '#e8e8e8'
+    : override === 'dark' ? '#2a2a2a'
+    : colors.tabBackground;
+
+  /** Foreground (text) colour to pair with `surfaceBgFor`. */
+  const surfaceFgFor = (override: 'light' | 'dark' | undefined) =>
+    override === 'light' ? '#333333'
+    : override === 'dark' ? '#d4d4d4'
+    : colors.foreground;
+
   useEffect(() => {
     // jsdom (used in tests) doesn't implement scrollIntoView; guard it so the
     // renderer doesn't crash during unit tests.
@@ -518,14 +674,14 @@ const App: React.FC = () => {
                 display: 'flex',
                 alignItems: 'center',
                 padding: '8px 16px',
-                backgroundColor: activeTabId === tab.id ? colors.tabActiveBackground : colors.tabBackground,
+                backgroundColor: activeTabId === tab.id ? surfaceBgFor(tab.themeOverride) : surfaceBgInactiveFor(tab.themeOverride),
                 borderTop: activeTabId === tab.id ? `2px solid ${colors.tabBorder}` : '2px solid transparent',
                 cursor: 'pointer',
                 borderRight: `1px solid ${colors.tabHover}`,
                 minWidth: '120px',
                 flexShrink: 0,
                 userSelect: 'none',
-                color: tab.isDirty ? '#e2c08d' : colors.foreground
+                color: tab.isDirty ? '#e2c08d' : surfaceFgFor(tab.themeOverride)
               }}
             >
               <span style={{ flexGrow: 1, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', fontSize: '13px' }}>
@@ -629,11 +785,11 @@ const App: React.FC = () => {
       )}
 
       {/* Editor Area */}
-      <div style={{ flexGrow: 1, overflow: 'hidden' }}>
+      <div style={{ flexGrow: 1, overflow: 'hidden', backgroundColor: activeTab ? surfaceBgFor(activeTab.themeOverride) : undefined }}>
         {activeTab ? (
           <Editor
             height="100%"
-            theme={currentTheme === 'light' ? 'light' : 'vs-dark'} /* Monaco respects custom definitions elsewhere if we register them */
+            theme={(activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark')) === 'light' ? 'light' : 'vs-dark'} /* Per-tab override falls back to global theme */
             path={activeTab.title} /* Monaco uses path to infer language (e.g. file.json -> json) */
             language={effectiveLanguage}
             value={activeTab.content}
@@ -706,8 +862,262 @@ const App: React.FC = () => {
               <span>Pop out to new window</span>
               <span style={{ opacity: 0.45, fontSize: '11px', flexShrink: 0 }}>Ctrl+Shift+N</span>
             </div>
+
+            {(() => {
+              const target = tabs.find(t => t.id === tabContextMenu.tabId);
+              const canRename = !!target?.filePath;
+              return (
+                <div
+                  role="menuitem"
+                  aria-disabled={!canRename}
+                  data-testid="tab-context-rename"
+                  onClick={() => { if (canRename) handleRenameTab(tabContextMenu.tabId); }}
+                  onMouseEnter={e => { if (canRename) (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                  style={{
+                    padding: '7px 16px',
+                    cursor: canRename ? 'pointer' : 'not-allowed',
+                    fontSize: '13px',
+                    color: colors.foreground,
+                    opacity: canRename ? 1 : 0.45,
+                    backgroundColor: 'transparent',
+                  }}
+                  title={canRename ? undefined : 'Save the file before renaming'}
+                >
+                  Rename…
+                </div>
+              );
+            })()}
+
+            {/* Separator */}
+            <div
+              style={{
+                height: '1px',
+                margin: '4px 0',
+                backgroundColor: colors.tabHover,
+              }}
+            />
+
+            {/* Theme submenu header */}
+            <div
+              style={{
+                padding: '4px 16px 2px',
+                fontSize: '11px',
+                color: colors.foreground,
+                opacity: 0.55,
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+              }}
+            >
+              Editor Theme
+            </div>
+            {(() => {
+              const target = tabs.find(t => t.id === tabContextMenu.tabId);
+              const override = target?.themeOverride;
+              const renderThemeItem = (
+                label: string,
+                value: 'light' | 'dark' | null,
+                testId: string
+              ) => {
+                const isActive =
+                  value === null ? override === undefined : override === value;
+                return (
+                  <div
+                    role="menuitemradio"
+                    aria-checked={isActive}
+                    data-testid={testId}
+                    onClick={() => handleSetTabTheme(tabContextMenu.tabId, value)}
+                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                    style={{
+                      padding: '7px 16px',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      color: colors.foreground,
+                      backgroundColor: 'transparent',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                    }}
+                  >
+                    <span style={{ width: '14px', display: 'inline-block', textAlign: 'center', opacity: isActive ? 1 : 0 }}>
+                      ✓
+                    </span>
+                    <span>{label}</span>
+                  </div>
+                );
+              };
+              return (
+                <>
+                  {renderThemeItem('Light', 'light', 'tab-context-theme-light')}
+                  {renderThemeItem('Dark', 'dark', 'tab-context-theme-dark')}
+                  {renderThemeItem('Use Default', null, 'tab-context-theme-default')}
+                </>
+              );
+            })()}
+
+            {/* Separator */}
+            <div
+              style={{
+                height: '1px',
+                margin: '4px 0',
+                backgroundColor: colors.tabHover,
+              }}
+            />
+
+            <div
+              role="menuitem"
+              data-testid="tab-context-close"
+              onClick={() => handleCloseTabFromMenu(tabContextMenu.tabId)}
+              onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+              style={{
+                padding: '7px 16px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                color: colors.foreground,
+                backgroundColor: 'transparent',
+              }}
+            >
+              Close Tab
+            </div>
+
+            {tabs.length > 1 && (
+              <div
+                role="menuitem"
+                data-testid="tab-context-close-others"
+                onClick={() => handleCloseOtherTabs(tabContextMenu.tabId)}
+                onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                style={{
+                  padding: '7px 16px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  color: colors.foreground,
+                  backgroundColor: 'transparent',
+                }}
+              >
+                Close Other Tabs
+              </div>
+            )}
+
+            <div
+              role="menuitem"
+              data-testid="tab-context-close-all"
+              onClick={() => handleCloseAllTabs()}
+              onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+              style={{
+                padding: '7px 16px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                color: colors.foreground,
+                backgroundColor: 'transparent',
+              }}
+            >
+              Close All Tabs
+            </div>
           </div>
         </>
+      )}
+
+      {/* Rename file modal */}
+      {renameTarget && (
+        <div
+          data-testid="rename-modal-backdrop"
+          onClick={closeRenameModal}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            backgroundColor: 'rgba(0,0,0,0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <div
+            data-testid="rename-modal"
+            role="dialog"
+            aria-label="Rename file"
+            onClick={e => e.stopPropagation()}
+            style={{
+              backgroundColor: colors.background,
+              border: `1px solid ${colors.tabHover}`,
+              borderRadius: '6px',
+              padding: '20px 24px',
+              minWidth: '360px',
+              boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
+            }}
+          >
+            <div style={{ fontSize: '14px', color: colors.foreground, marginBottom: '12px', fontWeight: 600 }}>
+              Rename file
+            </div>
+            <div style={{ fontSize: '12px', color: colors.foreground, opacity: 0.7, marginBottom: '8px' }}>
+              Current name: {renameTarget.currentName}
+            </div>
+            <input
+              data-testid="rename-modal-input"
+              autoFocus
+              value={renameInput}
+              onChange={e => { setRenameInput(e.target.value); if (renameError) setRenameError(null); }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); submitRename(); }
+                else if (e.key === 'Escape') { e.preventDefault(); closeRenameModal(); }
+              }}
+              style={{
+                width: '100%',
+                padding: '6px 8px',
+                fontSize: '13px',
+                color: colors.foreground,
+                backgroundColor: colors.tabHover,
+                border: `1px solid ${colors.tabHover}`,
+                borderRadius: '3px',
+                boxSizing: 'border-box',
+              }}
+            />
+            {renameError && (
+              <div
+                data-testid="rename-modal-error"
+                style={{ marginTop: '8px', fontSize: '12px', color: '#e06c75' }}
+              >
+                {renameError}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' }}>
+              <button
+                data-testid="rename-modal-cancel"
+                onClick={closeRenameModal}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: '13px',
+                  color: colors.foreground,
+                  backgroundColor: 'transparent',
+                  border: `1px solid ${colors.tabHover}`,
+                  borderRadius: '3px',
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                data-testid="rename-modal-submit"
+                onClick={submitRename}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: '13px',
+                  color: colors.background,
+                  backgroundColor: colors.foreground,
+                  border: `1px solid ${colors.foreground}`,
+                  borderRadius: '3px',
+                  cursor: 'pointer',
+                }}
+              >
+                Rename
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Status Bar */}

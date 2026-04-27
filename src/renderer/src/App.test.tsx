@@ -356,6 +356,275 @@ describe('Editor Core Tests', () => {
     });
   });
 
+  describe('tab context menu close actions', () => {
+    const makeSession = () => ({
+      activeTabId: 'tab-1',
+      tabs: [
+        { id: 'tab-1', title: 'alpha.txt', filePath: '/tmp/alpha.txt', content: 'aaa', isDirty: false, eol: 'LF' },
+        { id: 'tab-2', title: 'beta.txt',  filePath: '/tmp/beta.txt',  content: 'bbb', isDirty: false, eol: 'LF' },
+        { id: 'tab-3', title: 'gamma.txt', filePath: '/tmp/gamma.txt', content: 'ccc', isDirty: false, eol: 'LF' },
+      ],
+    });
+
+    beforeEach(() => {
+      (window as any).electronAPI.loadSession.mockResolvedValue(makeSession());
+      (window as any).electronAPI.readFile = vi.fn().mockImplementation(async (fp: string) => ({
+        filePath: fp,
+        content: fp.includes('alpha') ? 'aaa' : fp.includes('beta') ? 'bbb' : 'ccc',
+        eol: 'LF',
+      }));
+    });
+
+    const openContextOn = async (label: string) => {
+      await waitFor(() => screen.getByText(label));
+      const tab = screen.getByText(label).closest('div[draggable]') as HTMLElement;
+      fireEvent.contextMenu(tab);
+    };
+
+    it('renders Close Tab, Close Other Tabs, and Close All Tabs items', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await openContextOn('beta.txt');
+
+      expect(screen.getByTestId('tab-context-close')).toBeTruthy();
+      expect(screen.getByTestId('tab-context-close-others')).toBeTruthy();
+      expect(screen.getByTestId('tab-context-close-all')).toBeTruthy();
+    });
+
+    it('Close Tab removes only the right-clicked tab', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+      await waitFor(() => screen.getByText('beta.txt'));
+      await waitFor(() => screen.getByText('gamma.txt'));
+
+      await openContextOn('beta.txt');
+      fireEvent.click(screen.getByTestId('tab-context-close'));
+
+      await waitFor(() => expect(screen.queryByText('beta.txt')).toBeNull());
+      expect(screen.getByText('alpha.txt')).toBeTruthy();
+      expect(screen.getByText('gamma.txt')).toBeTruthy();
+    });
+
+    it('Close Other Tabs keeps the right-clicked tab and closes the rest', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+      await waitFor(() => screen.getByText('beta.txt'));
+      await waitFor(() => screen.getByText('gamma.txt'));
+
+      await openContextOn('beta.txt');
+      fireEvent.click(screen.getByTestId('tab-context-close-others'));
+
+      await waitFor(() => expect(screen.queryByText('alpha.txt')).toBeNull());
+      await waitFor(() => expect(screen.queryByText('gamma.txt')).toBeNull());
+      expect(screen.getByText('beta.txt')).toBeTruthy();
+    });
+
+    it('Close All Tabs closes every tab', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+
+      await openContextOn('alpha.txt');
+      fireEvent.click(screen.getByTestId('tab-context-close-all'));
+
+      await waitFor(() => expect(screen.queryByText('alpha.txt')).toBeNull());
+      expect(screen.queryByText('beta.txt')).toBeNull();
+      expect(screen.queryByText('gamma.txt')).toBeNull();
+    });
+
+    it('hides Close Other Tabs when only one tab is open', async () => {
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [{ id: 'tab-1', title: 'alpha.txt', filePath: '/tmp/alpha.txt', content: 'aaa', isDirty: false, eol: 'LF' }],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await openContextOn('alpha.txt');
+
+      expect(screen.queryByTestId('tab-context-close-others')).toBeNull();
+      expect(screen.getByTestId('tab-context-close')).toBeTruthy();
+      expect(screen.getByTestId('tab-context-close-all')).toBeTruthy();
+    });
+
+    it('skips dirty tabs when user cancels unsaved-changes prompt during Close All', async () => {
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'alpha.txt', filePath: '/tmp/alpha.txt', content: 'aaa', isDirty: false, eol: 'LF' },
+          { id: 'tab-2', title: 'beta.txt',  filePath: '/tmp/beta.txt',  content: 'BBB', isDirty: true,  eol: 'LF' },
+        ],
+      });
+      (window as any).electronAPI.confirmUnsavedChanges = vi.fn().mockResolvedValue('cancel');
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+      await waitFor(() => screen.getByText(/beta\.txt/));
+
+      await openContextOn('alpha.txt');
+      fireEvent.click(screen.getByTestId('tab-context-close-all'));
+
+      // alpha (clean) should close; beta (dirty + cancelled) should remain.
+      await waitFor(() => expect(screen.queryByText('alpha.txt')).toBeNull());
+      expect(screen.getByText(/beta\.txt/)).toBeTruthy();
+      expect((window as any).electronAPI.confirmUnsavedChanges).toHaveBeenCalledTimes(1);
+    });
+
+    it('hides the context menu after a close action', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await openContextOn('alpha.txt');
+      fireEvent.click(screen.getByTestId('tab-context-close'));
+
+      await waitFor(() => expect(screen.queryByTestId('tab-context-menu')).toBeNull());
+    });
+  });
+
+  describe('tab context menu — rename', () => {
+    const makeSession = () => ({
+      activeTabId: 'tab-1',
+      tabs: [
+        { id: 'tab-1', title: 'alpha.txt',  filePath: '/tmp/alpha.txt', content: 'aaa', isDirty: false, eol: 'LF' },
+        { id: 'tab-2', title: 'Untitled',   filePath: null,             content: '',    isDirty: false, eol: 'LF' },
+      ],
+    });
+
+    beforeEach(() => {
+      (window as any).electronAPI.loadSession.mockResolvedValue(makeSession());
+      (window as any).electronAPI.readFile = vi.fn().mockImplementation(async (fp: string) => ({
+        filePath: fp, content: 'aaa', eol: 'LF',
+      }));
+      (window as any).electronAPI.renameFile = vi.fn();
+    });
+
+    const openContextOn = async (label: string) => {
+      await waitFor(() => screen.getByText(label));
+      const tab = screen.getByText(label).closest('div[draggable]') as HTMLElement;
+      fireEvent.contextMenu(tab);
+    };
+
+    it('shows the Rename… menu item', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await openContextOn('alpha.txt');
+      expect(screen.getByTestId('tab-context-rename')).toBeTruthy();
+    });
+
+    it('disables Rename for tabs without a filePath', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await openContextOn('Untitled');
+      const item = screen.getByTestId('tab-context-rename');
+      expect(item.getAttribute('aria-disabled')).toBe('true');
+
+      fireEvent.click(item);
+      expect(screen.queryByTestId('rename-modal')).toBeNull();
+      expect((window as any).electronAPI.renameFile).not.toHaveBeenCalled();
+    });
+
+    it('opens the rename modal pre-filled with the current name', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await openContextOn('alpha.txt');
+      fireEvent.click(screen.getByTestId('tab-context-rename'));
+
+      const input = screen.getByTestId('rename-modal-input') as HTMLInputElement;
+      expect(input).toBeTruthy();
+      expect(input.value).toBe('alpha.txt');
+    });
+
+    it('closes the modal on Cancel without calling renameFile', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await openContextOn('alpha.txt');
+      fireEvent.click(screen.getByTestId('tab-context-rename'));
+
+      fireEvent.click(screen.getByTestId('rename-modal-cancel'));
+
+      await waitFor(() => expect(screen.queryByTestId('rename-modal')).toBeNull());
+      expect((window as any).electronAPI.renameFile).not.toHaveBeenCalled();
+    });
+
+    it('renames the file, updates the tab title and filePath on success', async () => {
+      (window as any).electronAPI.renameFile = vi.fn().mockResolvedValue({ ok: true, newPath: '/tmp/renamed.txt' });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await openContextOn('alpha.txt');
+      fireEvent.click(screen.getByTestId('tab-context-rename'));
+
+      const input = screen.getByTestId('rename-modal-input') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'renamed.txt' } });
+      fireEvent.click(screen.getByTestId('rename-modal-submit'));
+
+      await waitFor(() => expect(screen.queryByTestId('rename-modal')).toBeNull());
+      expect((window as any).electronAPI.renameFile).toHaveBeenCalledWith('/tmp/alpha.txt', 'renamed.txt');
+      expect(screen.getByText('renamed.txt')).toBeTruthy();
+      expect(screen.queryByText('alpha.txt')).toBeNull();
+    });
+
+    it('shows an inline error and keeps the modal open when renameFile fails', async () => {
+      (window as any).electronAPI.renameFile = vi.fn().mockResolvedValue({ ok: false, error: 'A file with that name already exists.' });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await openContextOn('alpha.txt');
+      fireEvent.click(screen.getByTestId('tab-context-rename'));
+
+      const input = screen.getByTestId('rename-modal-input') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'beta.txt' } });
+      fireEvent.click(screen.getByTestId('rename-modal-submit'));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('rename-modal-error').textContent).toContain('already exists'),
+      );
+      expect(screen.getByTestId('rename-modal')).toBeTruthy();
+      expect(screen.getByText('alpha.txt')).toBeTruthy();
+    });
+
+    it('rejects empty names client-side without calling the IPC', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await openContextOn('alpha.txt');
+      fireEvent.click(screen.getByTestId('tab-context-rename'));
+
+      const input = screen.getByTestId('rename-modal-input') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '   ' } });
+      fireEvent.click(screen.getByTestId('rename-modal-submit'));
+
+      expect(screen.getByTestId('rename-modal-error').textContent).toContain('empty');
+      expect((window as any).electronAPI.renameFile).not.toHaveBeenCalled();
+    });
+
+    it('rejects names containing path separators client-side', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await openContextOn('alpha.txt');
+      fireEvent.click(screen.getByTestId('tab-context-rename'));
+
+      const input = screen.getByTestId('rename-modal-input') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: '../evil.txt' } });
+      fireEvent.click(screen.getByTestId('rename-modal-submit'));
+
+      expect(screen.getByTestId('rename-modal-error').textContent).toContain('path separators');
+      expect((window as any).electronAPI.renameFile).not.toHaveBeenCalled();
+    });
+
+    it('submits via Enter key', async () => {
+      (window as any).electronAPI.renameFile = vi.fn().mockResolvedValue({ ok: true, newPath: '/tmp/notes.md' });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await openContextOn('alpha.txt');
+      fireEvent.click(screen.getByTestId('tab-context-rename'));
+
+      const input = screen.getByTestId('rename-modal-input') as HTMLInputElement;
+      fireEvent.change(input, { target: { value: 'notes.md' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      await waitFor(() => expect((window as any).electronAPI.renameFile).toHaveBeenCalledWith('/tmp/alpha.txt', 'notes.md'));
+    });
+
+    it('cancels via Escape key', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await openContextOn('alpha.txt');
+      fireEvent.click(screen.getByTestId('tab-context-rename'));
+
+      const input = screen.getByTestId('rename-modal-input') as HTMLInputElement;
+      fireEvent.keyDown(input, { key: 'Escape' });
+
+      await waitFor(() => expect(screen.queryByTestId('rename-modal')).toBeNull());
+      expect((window as any).electronAPI.renameFile).not.toHaveBeenCalled();
+    });
+  });
+
   describe('move to main window (onAddTab)', () => {
     it('adds a new tab when onAddTab fires', async () => {
       let addTabCallback: ((tabData: unknown) => void) | null = null;
@@ -402,6 +671,77 @@ describe('Editor Core Tests', () => {
 
       // Only one tab with this title
       expect(screen.getAllByText('existing.txt').length).toBe(1);
+    });
+  });
+
+  describe('per-tab theme override (context menu)', () => {
+    beforeEach(() => {
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'alpha.txt', filePath: '/tmp/alpha.txt', content: 'aaa', isDirty: false, eol: 'LF' },
+        ],
+      });
+      (window as any).electronAPI.readFile = vi.fn().mockResolvedValue({
+        filePath: '/tmp/alpha.txt', content: 'aaa', eol: 'LF',
+      });
+    });
+
+    it('renders Light, Dark, and Use Default items with "Use Default" checked initially', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+
+      const tab = screen.getByText('alpha.txt').closest('div[draggable]') as HTMLElement;
+      fireEvent.contextMenu(tab);
+
+      const lightItem = screen.getByTestId('tab-context-theme-light');
+      const darkItem = screen.getByTestId('tab-context-theme-dark');
+      const defaultItem = screen.getByTestId('tab-context-theme-default');
+
+      expect(lightItem).toBeTruthy();
+      expect(darkItem).toBeTruthy();
+      expect(defaultItem).toBeTruthy();
+
+      expect(lightItem.getAttribute('aria-checked')).toBe('false');
+      expect(darkItem.getAttribute('aria-checked')).toBe('false');
+      expect(defaultItem.getAttribute('aria-checked')).toBe('true');
+    });
+
+    it('checkmark moves to Light after selecting it', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+
+      const tab = screen.getByText('alpha.txt').closest('div[draggable]') as HTMLElement;
+      fireEvent.contextMenu(tab);
+      fireEvent.click(screen.getByTestId('tab-context-theme-light'));
+
+      // Menu closes after selection
+      await waitFor(() => expect(screen.queryByTestId('tab-context-menu')).toBeNull());
+
+      // Re-open and verify state
+      fireEvent.contextMenu(tab);
+      expect(screen.getByTestId('tab-context-theme-light').getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByTestId('tab-context-theme-dark').getAttribute('aria-checked')).toBe('false');
+      expect(screen.getByTestId('tab-context-theme-default').getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('"Use Default" clears a previously set override', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+
+      const tab = screen.getByText('alpha.txt').closest('div[draggable]') as HTMLElement;
+
+      fireEvent.contextMenu(tab);
+      fireEvent.click(screen.getByTestId('tab-context-theme-dark'));
+
+      fireEvent.contextMenu(tab);
+      expect(screen.getByTestId('tab-context-theme-dark').getAttribute('aria-checked')).toBe('true');
+
+      fireEvent.click(screen.getByTestId('tab-context-theme-default'));
+
+      fireEvent.contextMenu(tab);
+      expect(screen.getByTestId('tab-context-theme-default').getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByTestId('tab-context-theme-dark').getAttribute('aria-checked')).toBe('false');
     });
   });
 });

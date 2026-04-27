@@ -9,6 +9,10 @@ declare global {
       ) => Promise<string | null>;
       confirmUnsavedChanges: (tabTitle: string) => Promise<'save' | 'dont-save' | 'cancel'>;
       readFile: (filePath: string) => Promise<{ filePath: string; content: string; eol: 'LF' | 'CRLF' } | null>;
+      renameFile: (
+        oldPath: string,
+        newName: string
+      ) => Promise<{ ok: true; newPath: string } | { ok: false; error: string }>;
       getPathForFile: (file: File) => string;
 
       saveSession: (session: {

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import * as fs from 'fs';
 import { checkForUpdates } from './updater';
 
@@ -341,6 +341,52 @@ ipcMain.handle('dialog:saveFile', async (event, filePath: string, content: strin
   const normalized = applyEol(content, eol ?? 'LF');
   fs.writeFileSync(targetPath, normalized, 'utf-8');
   return targetPath;
+});
+
+/**
+ * Renames a file on disk. The renderer supplies the existing absolute path
+ * and the desired new basename (e.g. "notes.md"). The file is renamed within
+ * its current directory.
+ *
+ * Returns:
+ *  - { ok: true, newPath } on success
+ *  - { ok: false, error }  when validation or fs operations fail
+ */
+ipcMain.handle('file:rename', async (_event, oldPath: string, newName: string) => {
+  if (typeof oldPath !== 'string' || !oldPath) {
+    return { ok: false as const, error: 'No source path provided.' };
+  }
+  if (typeof newName !== 'string' || !newName.trim()) {
+    return { ok: false as const, error: 'New name cannot be empty.' };
+  }
+
+  const trimmed = newName.trim();
+  // Disallow path separators or traversal in the new basename — rename stays
+  // within the source directory by design.
+  if (/[\\/]/.test(trimmed) || trimmed === '.' || trimmed === '..') {
+    return { ok: false as const, error: 'Name cannot contain path separators.' };
+  }
+
+  try {
+    if (!fs.existsSync(oldPath)) {
+      return { ok: false as const, error: 'Source file no longer exists on disk.' };
+    }
+    const dir = dirname(oldPath);
+    const newPath = join(dir, trimmed);
+
+    if (newPath === oldPath) {
+      // No-op: the user kept the same name.
+      return { ok: true as const, newPath };
+    }
+    if (fs.existsSync(newPath)) {
+      return { ok: false as const, error: 'A file with that name already exists.' };
+    }
+
+    fs.renameSync(oldPath, newPath);
+    return { ok: true as const, newPath };
+  } catch (err) {
+    return { ok: false as const, error: (err as Error).message };
+  }
 });
 
 // ── Pop-out window ────────────────────────────────────────────────────────────

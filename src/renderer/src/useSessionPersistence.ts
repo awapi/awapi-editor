@@ -11,6 +11,8 @@ export interface SessionTab {
   language?: string;
   /** Line-ending kind used when saving this tab. Defaults to LF on restore. */
   eol?: EolKind;
+  /** Per-tab editor theme override (light/dark). Undefined = follow global theme. */
+  themeOverride?: 'light' | 'dark';
 }
 
 export interface SessionData {
@@ -30,7 +32,7 @@ const SAVE_DEBOUNCE_MS = 800;
  * For unsaved / dirty files the full content is stored so nothing is lost.
  */
 export function useSessionPersistence(
-  tabs: Array<{ id: string; title: string; filePath: string | null; content: string; isDirty?: boolean; language?: string; eol?: EolKind }>,
+  tabs: Array<{ id: string; title: string; filePath: string | null; content: string; isDirty?: boolean; language?: string; eol?: EolKind; themeOverride?: 'light' | 'dark' }>,
   activeTabId: string | null,
   enabled = true
 ): void {
@@ -52,6 +54,7 @@ export function useSessionPersistence(
         isDirty: tab.isDirty ?? false,
         language: tab.language,
         eol: tab.eol,
+        themeOverride: tab.themeOverride,
       })),
     };
 

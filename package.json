@@ -27,7 +27,9 @@
       "target": [
         "dmg"
       ],
-      "hardenedRuntime": true
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "identity": null
     },
     "win": {
       "icon": "build/icon.ico",

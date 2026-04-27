@@ -19,7 +19,8 @@ AwapiEditor is a fast, lightweight, universal text editor built specifically for
 
 1. Download the latest `.dmg` from the [Releases](https://github.com/awapi/awapi-editor/releases) page.
 2. Open the `.dmg` and drag **AwapiEditor** into your `/Applications` folder.
-3. Because the app is currently **not code-signed**, macOS Gatekeeper will block it on first launch. Run this once in Terminal to clear the quarantine flag:
+3. Because the app is currently **not code-signed**, macOS Gatekeeper will warn on first launch. Right-click (or Control-click) **AwapiEditor.app** → **Open** → **Open** to bypass the warning.
+   If that doesn't work, run this once in Terminal:
    ```bash
    xattr -cr "/Applications/AwapiEditor.app"
    ```

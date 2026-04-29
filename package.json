@@ -34,8 +34,21 @@
     "win": {
       "icon": "build/icon.ico",
       "target": [
-        "nsis"
+        "nsis",
+        "msi"
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-${version}-${arch}-setup.${ext}"
+    },
+    "msi": {
+      "oneClick": false,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "linux": {
       "icon": "build/icon-512x512.png",

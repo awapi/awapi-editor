@@ -73,8 +73,8 @@ clean:
 # Auto-publish requires the GitHub CLI (`brew install gh` + `gh auth login`).
 release version mode="draft":
     @echo "Bumping package.json to {{version}}..."
-    npm version {{version}} --no-git-tag-version
-    git add package.json package-lock.json
+    pnpm version {{version}} --no-git-tag-version
+    git add package.json pnpm-lock.yaml
     git commit -m "chore: release v{{version}}"
     git push
     @echo "Creating and pushing release tag v{{version}}..."

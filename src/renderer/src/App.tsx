@@ -18,6 +18,11 @@ interface Tab {
   filePath: string | null;
   content: string;
   isDirty?: boolean;
+  /** The content as it existed on disk at the last open or save. Used to
+   *  auto-clear the dirty flag when the user undoes all edits back to the
+   *  saved state. Undefined means the saved state is unknown (e.g. a dirty
+   *  tab restored from a previous session), so the tab stays dirty. */
+  savedContent?: string;
   /** User-selected Monaco language id. When undefined, the language is
    *  inferred from the filename extension (or "plaintext" if none). */
   language?: string;
@@ -48,6 +53,7 @@ const App: React.FC = () => {
       filePath: null,
       content: '',
       isDirty: false,
+      savedContent: '',
       eol: 'LF'
     };
     setTabs(prev => [...prev, newTab]);
@@ -104,7 +110,7 @@ const App: React.FC = () => {
                   if (saved.filePath && !saved.isDirty) {
                     try {
                       const fileData = await w.electronAPI.readFile(saved.filePath);
-                      if (fileData) return { ...saved, content: fileData.content, eol: fileData.eol };
+                      if (fileData) return { ...saved, content: fileData.content, eol: fileData.eol, savedContent: fileData.content };
                     } catch {
                       // File no longer exists – fall through and use stored content
                     }
@@ -158,6 +164,7 @@ const App: React.FC = () => {
               filePath: result.filePath,
               content: result.content,
               isDirty: false,
+              savedContent: result.content,
               eol: result.eol
             }]);
             setActiveTabId(id);
@@ -179,9 +186,10 @@ const App: React.FC = () => {
           );
           if (savedPath) {
             const fileName = savedPath.split(/[\\/]/).pop() || savedPath;
+            const savedContent = currentTab.content;
             setTabs(prev => prev.map(t => 
               t.id === active 
-                ? { ...t, filePath: savedPath, title: fileName, isDirty: false }
+                ? { ...t, filePath: savedPath, title: fileName, isDirty: false, savedContent }
                 : t
             ));
           }
@@ -202,9 +210,10 @@ const App: React.FC = () => {
           );
           if (savedPath) {
             const fileName = savedPath.split(/[\\/]/).pop() || savedPath;
+            const savedContent = currentTab.content;
             setTabs(prev => prev.map(t => 
               t.id === active 
-                ? { ...t, filePath: savedPath, title: fileName, isDirty: false }
+                ? { ...t, filePath: savedPath, title: fileName, isDirty: false, savedContent }
                 : t
             ));
           }
@@ -292,6 +301,7 @@ const App: React.FC = () => {
               filePath: result.filePath,
               content: result.content,
               isDirty: false,
+              savedContent: result.content,
               eol: result.eol,
             }]);
             setActiveTabId(id);
@@ -337,6 +347,7 @@ const App: React.FC = () => {
                 filePath: result.filePath,
                 content: result.content,
                 isDirty: false,
+                savedContent: result.content,
                 eol: result.eol
               }]);
               setActiveTabId(id);
@@ -365,11 +376,11 @@ const App: React.FC = () => {
   const handleEditorChange = (value: string | undefined) => {
     if(!activeTabId || typeof value === 'undefined') return;
     
-    setTabs(prev => prev.map(t => 
-      t.id === activeTabId 
-        ? { ...t, content: value, isDirty: true }
-        : t
-    ));
+    setTabs(prev => prev.map(t => {
+      if (t.id !== activeTabId) return t;
+      const isDirty = t.savedContent === undefined ? true : value !== t.savedContent;
+      return { ...t, content: value, isDirty };
+    }));
   };
 
   /**
@@ -636,6 +647,10 @@ const App: React.FC = () => {
     : override === 'dark' ? '#d4d4d4'
     : colors.foreground;
 
+  /** Colour used for tabs with unsaved changes. Adapts to light/dark theme so
+   *  the indicator is legible in both modes. */
+  const dirtyColor = currentTheme === 'light' ? '#b45309' : '#e2c08d';
+
   useEffect(() => {
     // jsdom (used in tests) doesn't implement scrollIntoView; guard it so the
     // renderer doesn't crash during unit tests.
@@ -669,6 +684,7 @@ const App: React.FC = () => {
               onDragOver={handleDragOver}
               onDrop={(e) => handleDrop(e, index)}
               onClick={() => setActiveTabId(tab.id)}
+              onAuxClick={(e) => { if (e.button === 1) closeTab(e, tab.id); }}
               onContextMenu={(e) => { e.preventDefault(); setTabContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY }); }}
               style={{
                 display: 'flex',
@@ -681,7 +697,7 @@ const App: React.FC = () => {
                 minWidth: '120px',
                 flexShrink: 0,
                 userSelect: 'none',
-                color: tab.isDirty ? '#e2c08d' : surfaceFgFor(tab.themeOverride)
+                color: tab.isDirty ? dirtyColor : surfaceFgFor(tab.themeOverride)
               }}
             >
               <span style={{ flexGrow: 1, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', fontSize: '13px' }}>
@@ -768,7 +784,7 @@ const App: React.FC = () => {
             borderBottom: `1px solid ${colors.tabHover}`,
             flexShrink: 0,
             fontSize: '13px',
-            color: activeTab.isDirty ? '#e2c08d' : colors.foreground,
+            color: activeTab.isDirty ? dirtyColor : colors.foreground,
             userSelect: 'none',
           }}
         >

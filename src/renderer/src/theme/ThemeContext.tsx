@@ -55,8 +55,27 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       ? defaultDark 
       : customThemes[currentTheme]?.colors || defaultDark;
 
+  const applyNativeTheme = (theme: ThemeType, themes: Record<string, CustomTheme>) => {
+    const w = window as any;
+    if (!w.electronAPI?.applyNativeTheme) return;
+    let mode: 'light' | 'dark';
+    if (theme === 'light') mode = 'light';
+    else if (theme === 'dark') mode = 'dark';
+    else mode = themes[theme]?.type ?? 'dark';
+    w.electronAPI.applyNativeTheme(mode);
+  };
+
+  const setTheme = (theme: ThemeType) => {
+    setCurrentTheme(theme);
+    applyNativeTheme(theme, customThemes);
+  };
+
   const importThemeFromMain = (newTheme: CustomTheme) => {
-    setCustomThemes(prev => ({ ...prev, [newTheme.id]: newTheme }));
+    setCustomThemes(prev => {
+      const updated = { ...prev, [newTheme.id]: newTheme };
+      applyNativeTheme(newTheme.id, updated);
+      return updated;
+    });
     setCurrentTheme(newTheme.id);
   };
 
@@ -65,19 +84,23 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // Restore persisted theme from settings on startup
     if (w.electronAPI?.loadSettings) {
       w.electronAPI.loadSettings().then((settings: { theme?: string | null }) => {
-        if (settings?.theme) setCurrentTheme(settings.theme);
+        if (settings?.theme) {
+          setCurrentTheme(settings.theme);
+          applyNativeTheme(settings.theme, customThemes);
+        }
       }).catch(() => {});
     }
     // Listen for theme changes sent via the menu (legacy path)
     if (w.electronAPI?.onThemeChange) {
       w.electronAPI.onThemeChange((themeName: string) => {
         setCurrentTheme(themeName);
+        applyNativeTheme(themeName, customThemes);
       });
     }
   }, []);
 
   return (
-    <ThemeContext.Provider value={{ currentTheme, colors, setTheme: setCurrentTheme, importThemeFromMain }}>
+    <ThemeContext.Provider value={{ currentTheme, colors, setTheme, importThemeFromMain }}>
       {children}
     </ThemeContext.Provider>
   );

@@ -17,6 +17,7 @@ describe('SettingsModal', () => {
     mockElectronAPI = {
       loadSettings: vi.fn().mockResolvedValue({ sessionDir: null }),
       saveSettings: vi.fn().mockResolvedValue(true),
+      applyNativeTheme: vi.fn().mockResolvedValue(undefined),
       getDefaultSessionDir: vi.fn().mockResolvedValue('/home/user/.config/awapi-editor'),
       openDirDialog: vi.fn().mockResolvedValue(null),
       openInExplorer: vi.fn().mockResolvedValue(undefined),

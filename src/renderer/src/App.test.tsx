@@ -1,7 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import App from './App';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { ThemeProvider } from './theme/ThemeContext';
+
+// Capture the latest onChange prop passed to the Monaco Editor component so
+// tests can simulate user edits without a real DOM canvas.
+let capturedEditorOnChange: ((value: string | undefined) => void) | undefined;
+vi.mock('@monaco-editor/react', () => ({
+  default: vi.fn((props: any) => {
+    capturedEditorOnChange = props.onChange;
+    return null;
+  }),
+}));
 
 describe('Editor Core Tests', () => {
   beforeEach(() => {
@@ -24,6 +34,7 @@ describe('Editor Core Tests', () => {
       readFile: vi.fn().mockResolvedValue({ filePath: '/mock/path/file.txt', content: 'mock content' }),
       saveSession: vi.fn().mockResolvedValue(true),
       loadSession: vi.fn().mockResolvedValue(null), // no previous session by default
+      applyNativeTheme: vi.fn().mockResolvedValue(undefined),
       getPopoutData: vi.fn().mockResolvedValue(null),
       moveToMain: vi.fn().mockResolvedValue(undefined),
       onMoveToMain: vi.fn(),
@@ -143,6 +154,41 @@ describe('Editor Core Tests', () => {
     await waitFor(() => expect((window as any).electronAPI.readFile.mock.calls.length).toBe(callsBefore));
   });
 
+  it('closes a tab on middle-click (auxclick button=1)', async () => {
+    (window as any).electronAPI.loadSession.mockResolvedValue({
+      activeTabId: 'tab-1',
+      tabs: [
+        { id: 'tab-1', title: 'alpha.txt', filePath: '/tmp/alpha.txt', content: 'aaa', isDirty: false, eol: 'LF' },
+        { id: 'tab-2', title: 'beta.txt',  filePath: '/tmp/beta.txt',  content: 'bbb', isDirty: false, eol: 'LF' },
+      ],
+    });
+    render(<ThemeProvider><App /></ThemeProvider>);
+    await waitFor(() => screen.getByText('alpha.txt'));
+    await waitFor(() => screen.getByText('beta.txt'));
+
+    const tab = screen.getByText('alpha.txt').closest('div[draggable]') as HTMLElement;
+    fireEvent(tab, new MouseEvent('auxclick', { button: 1, bubbles: true }));
+
+    await waitFor(() => expect(screen.queryByText('alpha.txt')).toBeNull());
+    expect(screen.getByText('beta.txt')).toBeTruthy();
+  });
+
+  it('does not close a tab on other auxclick buttons', async () => {
+    (window as any).electronAPI.loadSession.mockResolvedValue({
+      activeTabId: 'tab-1',
+      tabs: [
+        { id: 'tab-1', title: 'alpha.txt', filePath: '/tmp/alpha.txt', content: 'aaa', isDirty: false, eol: 'LF' },
+      ],
+    });
+    render(<ThemeProvider><App /></ThemeProvider>);
+    await waitFor(() => screen.getByText('alpha.txt'));
+
+    const tab = screen.getByText('alpha.txt').closest('div[draggable]') as HTMLElement;
+    fireEvent(tab, new MouseEvent('auxclick', { button: 2, bubbles: true }));
+
+    expect(screen.getByText('alpha.txt')).toBeTruthy();
+  });
+
   it('should open a new tab when double-clicking the empty tab bar space', async () => {
     render(
       <ThemeProvider>
@@ -155,6 +201,57 @@ describe('Editor Core Tests', () => {
     const tabsBefore = screen.getAllByText('Untitled').length;
     fireEvent.dblClick(spacer);
     await waitFor(() => expect(screen.getAllByText('Untitled').length).toBe(tabsBefore + 1));
+  });
+
+  describe('dirty flag / undo-to-clean behaviour', () => {
+    const makeCleanSession = () => ({
+      activeTabId: 'tab-1',
+      tabs: [{
+        id: 'tab-1',
+        title: 'notes.txt',
+        filePath: '/tmp/notes.txt',
+        content: 'original',
+        isDirty: false,
+        eol: 'LF',
+      }],
+    });
+
+    beforeEach(() => {
+      (window as any).electronAPI.loadSession.mockResolvedValue(makeCleanSession());
+      (window as any).electronAPI.readFile = vi.fn().mockResolvedValue({
+        filePath: '/tmp/notes.txt',
+        content: 'original',
+        eol: 'LF',
+      });
+    });
+
+    it('tab starts clean (no * in title) after opening a saved file', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('notes.txt'));
+      expect(screen.queryByText(/\*/)).toBeNull();
+    });
+
+    it('shows dirty indicator (*) when editor fires a changed value', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('notes.txt'));
+
+      act(() => { capturedEditorOnChange?.('modified'); });
+      await waitFor(() => screen.getByText(/notes\.txt.*\*/));
+    });
+
+    it('clears dirty indicator when editor content is reverted to the saved content', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('notes.txt'));
+
+      // Make it dirty
+      act(() => { capturedEditorOnChange?.('modified'); });
+      await waitFor(() => screen.getByText(/notes\.txt.*\*/));
+
+      // Undo back to original — dirty should clear
+      act(() => { capturedEditorOnChange?.('original'); });
+      await waitFor(() => expect(screen.queryByText(/notes\.txt.*\*/)).toBeNull());
+      expect(screen.getByText('notes.txt')).toBeTruthy();
+    });
   });
 
   describe('closeTab unsaved confirmation', () => {

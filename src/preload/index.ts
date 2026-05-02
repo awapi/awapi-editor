@@ -15,6 +15,7 @@ export const electronAPI = {
 
   loadSettings: () => ipcRenderer.invoke('settings:load'),
   saveSettings: (settings: unknown) => ipcRenderer.invoke('settings:save', settings),
+  applyNativeTheme: (theme: string) => ipcRenderer.invoke('theme:applyNative', theme),
   getDefaultSessionDir: () => ipcRenderer.invoke('settings:getDefaultDir'),
   openDirDialog: () => ipcRenderer.invoke('settings:openDirDialog'),
   openInExplorer: (dirPath: string) => ipcRenderer.invoke('settings:openInExplorer', dirPath),

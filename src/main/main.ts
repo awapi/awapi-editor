@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } from 'electron';
 import { dirname, join } from 'path';
 import * as fs from 'fs';
 import { checkForUpdates } from './updater';
@@ -126,6 +126,11 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Apply the persisted theme to the native title bar before the window opens
+  // so there is no dark-title-bar flash when the user prefers light theme.
+  const startupSettings = loadAppSettings();
+  nativeTheme.themeSource = startupSettings.theme === 'light' ? 'light' : 'dark';
+
   // Set the macOS Dock icon explicitly in dev (BrowserWindow.icon doesn't affect the Dock)
   if (process.platform === 'darwin' && isDev && app.dock) {
     app.dock.setIcon(join(__dirname, '../../build/icon.png'));
@@ -255,6 +260,11 @@ ipcMain.handle('settings:save', async (_, settings: AppSettings) => {
     console.error('Failed to save settings:', error);
     return false;
   }
+});
+
+// Sync the native OS title-bar appearance with the app's theme selection.
+ipcMain.handle('theme:applyNative', (_, theme: string) => {
+  nativeTheme.themeSource = theme === 'light' ? 'light' : 'dark';
 });
 
 ipcMain.handle('settings:getDefaultDir', async () => {

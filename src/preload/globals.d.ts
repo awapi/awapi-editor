@@ -40,6 +40,7 @@ declare global {
 
       loadSettings: () => Promise<{ sessionDir: string | null; theme?: string | null }>;
       saveSettings: (settings: { sessionDir: string | null; theme?: string | null }) => Promise<boolean>;
+      applyNativeTheme: (theme: string) => Promise<void>;
       getDefaultSessionDir: () => Promise<string>;
       openDirDialog: () => Promise<string | null>;
       openInExplorer: (dirPath: string) => Promise<void>;

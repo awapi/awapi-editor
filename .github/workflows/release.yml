@@ -28,7 +28,7 @@ jobs:
           node-version: 22
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: latest
           run_install: false
@@ -42,7 +42,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Needed if electron-builder auto-publishes
           
       - name: Upload Artifacts (macOS/Linux)
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         if: matrix.os != 'windows-latest'
         with:
           name: awapi-editor-${{ matrix.os }}
@@ -54,7 +54,7 @@ jobs:
           retention-days: 7
           
       - name: Upload Artifacts (Windows)
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         if: matrix.os == 'windows-latest'
         with:
           name: awapi-editor-${{ matrix.os }}

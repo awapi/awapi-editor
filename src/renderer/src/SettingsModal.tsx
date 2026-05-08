@@ -161,11 +161,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
 
             {/* Session Storage Section */}
             <div style={sectionStyle}>
-              <div style={labelStyle}>Session Storage</div>
+              <div style={labelStyle}>Backup Folder (Unsaved Files)</div>
               <p style={{ fontSize: '12px', opacity: 0.7, margin: '0 0 10px' }}>
-                Open tabs and unsaved content are automatically saved here and restored on next launch.
+                Unsaved files are backed up here in individual files for easy recovery. Open tabs and session state are restored on next launch.
                 {sessionDir === null && (
-                  <span style={{ marginLeft: 4, opacity: 0.55 }}>(using default location)</span>
+                  <span style={{ marginLeft: 4, opacity: 0.55 }}>(default: ~/Documents/AwapiEditor Backups)</span>
                 )}
               </p>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>

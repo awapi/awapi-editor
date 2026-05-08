@@ -1,7 +1,20 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } from 'electron';
+
+// Set app name BEFORE any imports that use app.getPath()
+app.name = 'AwapiEditor';
+
 import { dirname, join } from 'path';
 import * as fs from 'fs';
 import { checkForUpdates } from './updater';
+import { 
+  loadAppSettings, 
+  saveAppSettings, 
+  getSessionDirPath,
+  getDefaultBackupDir,
+  saveSession, 
+  loadSession,
+  type AppSettings
+} from './session';
 
 /** Line-ending kinds supported by the editor. Mirrors renderer/src/lineEndings. */
 type EolKind = 'LF' | 'CRLF';
@@ -21,8 +34,6 @@ function applyEol(content: string, eol: EolKind): string {
   const lf = normalizeToLF(content);
   return eol === 'CRLF' ? lf.replace(/\n/g, '\r\n') : lf;
 }
-
-app.name = 'AwapiEditor';
 
 // Environment variable indicating if we are in dev mode
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
@@ -192,59 +203,16 @@ ipcMain.handle('file:read', async (_, filePath: string) => {
 });
 
 // ── App Settings ─────────────────────────────────────────────────────────────
-interface AppSettings {
-  /** Custom directory where session.json is stored. null = use userData default. */
-  sessionDir: string | null;
-  /** Last selected theme ('dark' | 'light'). null/undefined = default dark. */
-  theme?: string | null;
-}
+// AppSettings interface and settings functions are now imported from ./session
 
-const SETTINGS_FILE = join(app.getPath('userData'), 'settings.json');
-
-function loadAppSettings(): AppSettings {
-  try {
-    if (fs.existsSync(SETTINGS_FILE)) {
-      return JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8')) as AppSettings;
-    }
-  } catch {
-    // ignore corrupt settings
-  }
-  return { sessionDir: null };
-}
-
-function getSessionFilePath(): string {
-  const settings = loadAppSettings();
-  const dir = settings.sessionDir || app.getPath('userData');
-  return join(dir, 'session.json');
-}
-
-// Session persistence – save / load the editor session (open tabs) so the
-// previous workspace is restored automatically on next launch.
+// ── Session persistence ──────────────────────────────────────────────────────
+// Session handlers use folder-based structure: session/session.json + session/unsaved/{tabId}.txt
 ipcMain.handle('session:save', async (_, sessionData: unknown) => {
-  try {
-    const sessionFile = getSessionFilePath();
-    const dir = sessionFile.substring(0, sessionFile.lastIndexOf('/') !== -1
-      ? sessionFile.lastIndexOf('/')
-      : sessionFile.lastIndexOf('\\'));
-    if (dir && !fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(sessionFile, JSON.stringify(sessionData), 'utf-8');
-    return true;
-  } catch (error) {
-    console.error('Failed to save session:', error);
-    return false;
-  }
+  return saveSession(sessionData);
 });
 
 ipcMain.handle('session:load', async () => {
-  try {
-    const sessionFile = getSessionFilePath();
-    if (!fs.existsSync(sessionFile)) return null;
-    const raw = fs.readFileSync(sessionFile, 'utf-8');
-    return JSON.parse(raw);
-  } catch (error) {
-    console.error('Failed to load session:', error);
-    return null;
-  }
+  return loadSession();
 });
 
 // ── Settings IPC ──────────────────────────────────────────────────────────────
@@ -254,7 +222,7 @@ ipcMain.handle('settings:load', async () => {
 
 ipcMain.handle('settings:save', async (_, settings: AppSettings) => {
   try {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings), 'utf-8');
+    saveAppSettings(settings);
     return true;
   } catch (error) {
     console.error('Failed to save settings:', error);
@@ -268,7 +236,7 @@ ipcMain.handle('theme:applyNative', (_, theme: string) => {
 });
 
 ipcMain.handle('settings:getDefaultDir', async () => {
-  return app.getPath('userData');
+  return getDefaultBackupDir();
 });
 
 ipcMain.handle('settings:openDirDialog', async (event) => {

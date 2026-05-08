@@ -82,6 +82,9 @@
   "overrides": {
     "dompurify": "^3.4.1"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "electron-winstaller", "esbuild", "sharp"]
+  },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
     "lucide-react": "^1.8.0",

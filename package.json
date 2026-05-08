@@ -1,6 +1,6 @@
 {
   "name": "awapi-editor",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "A fast, lightweight, universal text editor",
   "main": "dist/main/main.js",
   "scripts": {
@@ -83,7 +83,12 @@
     "dompurify": "^3.4.1"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["electron", "electron-winstaller", "esbuild", "sharp"]
+    "onlyBuiltDependencies": [
+      "electron",
+      "electron-winstaller",
+      "esbuild",
+      "sharp"
+    ]
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

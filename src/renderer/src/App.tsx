@@ -44,6 +44,34 @@ const App: React.FC = () => {
   const [renameInput, setRenameInput] = useState('');
   const [renameError, setRenameError] = useState<string | null>(null);
   const editorRef = React.useRef<any>(null);
+  const editorDisposablesRef = React.useRef<Array<{ dispose: () => void }>>([]);
+  const [cursorPosition, setCursorPosition] = useState<{ line: number; column: number }>({ line: 1, column: 1 });
+  const [selectionSummary, setSelectionSummary] = useState<{ lines: number; chars: number }>({ lines: 0, chars: 0 });
+
+  const updateSelectionSummary = React.useCallback((editor: any) => {
+    const selection = editor?.getSelection?.();
+    if (!selection || selection.isEmpty()) {
+      setSelectionSummary({ lines: 0, chars: 0 });
+      return;
+    }
+
+    const lines = Math.abs(selection.endLineNumber - selection.startLineNumber) + 1;
+
+    let chars = 0;
+    const model = editor?.getModel?.();
+    if (model?.getValueLengthInRange) {
+      chars = model.getValueLengthInRange(selection);
+    } else if (model?.getValueInRange) {
+      chars = model.getValueInRange(selection).length;
+    }
+
+    setSelectionSummary({ lines, chars });
+  }, []);
+
+  const resetStatusMetrics = React.useCallback(() => {
+    setCursorPosition({ line: 1, column: 1 });
+    setSelectionSummary({ lines: 0, chars: 0 });
+  }, []);
 
   const addNewTab = () => {
     const id = `tab-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -69,6 +97,19 @@ const App: React.FC = () => {
     tabsRef.current = tabs;
     activeTabIdRef.current = activeTabId;
   }, [tabs, activeTabId]);
+
+  useEffect(() => {
+    if (!activeTabId) {
+      resetStatusMetrics();
+    }
+  }, [activeTabId, resetStatusMetrics]);
+
+  useEffect(() => {
+    return () => {
+      editorDisposablesRef.current.forEach(d => d.dispose());
+      editorDisposablesRef.current = [];
+    };
+  }, []);
 
   // Auto-save session whenever tabs or active tab changes (disabled in popout windows)
   useSessionPersistence(tabs, activeTabId, !isPopoutMode);
@@ -811,7 +852,29 @@ const App: React.FC = () => {
             value={activeTab.content}
             onChange={handleEditorChange}
             onMount={(editor) => {
+              editorDisposablesRef.current.forEach(d => d.dispose());
+              editorDisposablesRef.current = [];
               editorRef.current = editor;
+
+              const position = editor.getPosition?.();
+              if (position) {
+                setCursorPosition({ line: position.lineNumber, column: position.column });
+              }
+              updateSelectionSummary(editor);
+
+              const cursorDisposable = editor.onDidChangeCursorPosition?.((event: any) => {
+                setCursorPosition({ line: event.position.lineNumber, column: event.position.column });
+              });
+              if (cursorDisposable) {
+                editorDisposablesRef.current.push(cursorDisposable);
+              }
+
+              const selectionDisposable = editor.onDidChangeCursorSelection?.(() => {
+                updateSelectionSummary(editor);
+              });
+              if (selectionDisposable) {
+                editorDisposablesRef.current.push(selectionDisposable);
+              }
             }}
             options={{
               minimap: { enabled: true },
@@ -1141,7 +1204,7 @@ const App: React.FC = () => {
         data-testid="status-bar"
         style={{
           display: 'flex',
-          justifyContent: 'flex-end',
+          justifyContent: 'space-between',
           alignItems: 'center',
           padding: '4px 8px',
           borderTop: `1px solid ${colors.tabHover}`,
@@ -1149,6 +1212,34 @@ const App: React.FC = () => {
           flexShrink: 0,
         }}
       >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            fontSize: '12px',
+            color: colors.foreground,
+            opacity: 0.9,
+          }}
+        >
+          {activeTab && (
+            <span data-testid="status-cursor-position">
+              Ln {cursorPosition.line}, Col {cursorPosition.column}
+            </span>
+          )}
+          {activeTab && (
+            <span data-testid="status-selection-summary">
+              Sel {selectionSummary.lines}L, {selectionSummary.chars}C
+            </span>
+          )}
+          {activeTab && (
+            <span data-testid="status-total-characters">
+              Chars {activeTab.content.length}
+            </span>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center' }}>
         {activeTab && (
           <LineEndingSelector
             eol={activeTab.eol ?? 'LF'}
@@ -1176,6 +1267,7 @@ const App: React.FC = () => {
             }}
           />
         )}
+        </div>
       </div>
     </div>
   );

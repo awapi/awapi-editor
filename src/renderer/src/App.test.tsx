@@ -1,3 +1,4 @@
+import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import App from './App';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
@@ -6,15 +7,105 @@ import { ThemeProvider } from './theme/ThemeContext';
 // Capture the latest onChange prop passed to the Monaco Editor component so
 // tests can simulate user edits without a real DOM canvas.
 let capturedEditorOnChange: ((value: string | undefined) => void) | undefined;
+let mockEditorValue = '';
+let mockCursorPosition = { lineNumber: 1, column: 1 };
+let mockSelectionCharCount = 0;
+let cursorPositionListener: ((event: { position: { lineNumber: number; column: number } }) => void) | undefined;
+let cursorSelectionListener: (() => void) | undefined;
+let mockSelection = {
+  startLineNumber: 1,
+  startColumn: 1,
+  endLineNumber: 1,
+  endColumn: 1,
+  isEmpty: () => true,
+};
+
+const resetMonacoMockState = () => {
+  capturedEditorOnChange = undefined;
+  mockEditorValue = '';
+  mockCursorPosition = { lineNumber: 1, column: 1 };
+  mockSelectionCharCount = 0;
+  cursorPositionListener = undefined;
+  cursorSelectionListener = undefined;
+  mockSelection = {
+    startLineNumber: 1,
+    startColumn: 1,
+    endLineNumber: 1,
+    endColumn: 1,
+    isEmpty: () => true,
+  };
+};
+
+const setMockCursorPosition = (lineNumber: number, column: number) => {
+  mockCursorPosition = { lineNumber, column };
+};
+
+const setMockSelection = (
+  selection: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number },
+  chars: number,
+  empty = false,
+) => {
+  mockSelection = {
+    ...selection,
+    isEmpty: () => empty,
+  };
+  mockSelectionCharCount = chars;
+};
+
+const emitCursorPositionChange = () => {
+  cursorPositionListener?.({ position: mockCursorPosition });
+};
+
+const emitCursorSelectionChange = () => {
+  cursorSelectionListener?.();
+};
+
+const mockEditorInstance = {
+  getAction: vi.fn(() => ({ run: vi.fn() })),
+  trigger: vi.fn(),
+  getValue: vi.fn(() => mockEditorValue),
+  getPosition: vi.fn(() => mockCursorPosition),
+  getSelection: vi.fn(() => mockSelection),
+  getModel: vi.fn(() => ({
+    getValueLengthInRange: vi.fn(() => mockSelectionCharCount),
+    getValueInRange: vi.fn(() => 'x'.repeat(mockSelectionCharCount)),
+  })),
+  onDidChangeCursorPosition: vi.fn((listener: (event: { position: { lineNumber: number; column: number } }) => void) => {
+    cursorPositionListener = listener;
+    return {
+      dispose: () => {
+        if (cursorPositionListener === listener) {
+          cursorPositionListener = undefined;
+        }
+      },
+    };
+  }),
+  onDidChangeCursorSelection: vi.fn((listener: () => void) => {
+    cursorSelectionListener = listener;
+    return {
+      dispose: () => {
+        if (cursorSelectionListener === listener) {
+          cursorSelectionListener = undefined;
+        }
+      },
+    };
+  }),
+};
+
 vi.mock('@monaco-editor/react', () => ({
   default: vi.fn((props: any) => {
     capturedEditorOnChange = props.onChange;
+    React.useEffect(() => {
+      props.onMount?.(mockEditorInstance);
+      // Run once per mounted mock editor instance to mirror Monaco behavior.
+    }, []);
     return null;
   }),
 }));
 
 describe('Editor Core Tests', () => {
   beforeEach(() => {
+    resetMonacoMockState();
     (window as any).electronAPI = {
       onNewFile: vi.fn(),
       onOpenFile: vi.fn(),
@@ -66,6 +157,65 @@ describe('Editor Core Tests', () => {
     const btn = screen.getByTestId('word-wrap-toggle');
     expect(btn).toBeDefined();
     expect(btn.title).toBe('Disable Word Wrap');
+  });
+
+  it('shows cursor, selection, and total character summaries in the status bar', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    );
+
+    await waitFor(() => screen.getByTestId('status-cursor-position'));
+    expect(screen.getByTestId('status-cursor-position').textContent).toBe('Ln 1, Col 1');
+    expect(screen.getByTestId('status-selection-summary').textContent).toBe('Sel 0L, 0C');
+    expect(screen.getByTestId('status-total-characters').textContent).toBe('Chars 0');
+  });
+
+  it('updates total characters when editor content changes', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    );
+
+    await waitFor(() => screen.getByTestId('status-total-characters'));
+
+    act(() => {
+      mockEditorValue = 'hello world';
+      capturedEditorOnChange?.('hello world');
+    });
+
+    await waitFor(() => expect(screen.getByTestId('status-total-characters').textContent).toBe('Chars 11'));
+  });
+
+  it('updates cursor and selection summaries from Monaco cursor events', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    );
+
+    await waitFor(() => screen.getByTestId('status-cursor-position'));
+
+    act(() => {
+      setMockCursorPosition(3, 7);
+      setMockSelection(
+        {
+          startLineNumber: 2,
+          startColumn: 1,
+          endLineNumber: 4,
+          endColumn: 2,
+        },
+        18,
+        false,
+      );
+      emitCursorPositionChange();
+      emitCursorSelectionChange();
+    });
+
+    await waitFor(() => expect(screen.getByTestId('status-cursor-position').textContent).toBe('Ln 3, Col 7'));
+    expect(screen.getByTestId('status-selection-summary').textContent).toBe('Sel 3L, 18C');
   });
 
   it('should toggle word wrap title on click', () => {

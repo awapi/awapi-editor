@@ -39,7 +39,7 @@ export function saveAppSettings(settings: AppSettings): void {
  * This is user-accessible on all platforms and follows OS conventions.
  */
 export function getDefaultBackupDir(): string {
-  return join(app.getPath('documents'), 'AwapiEditor Backups');
+  return join(app.getPath('documents'), 'AwapiEditor', 'Backups');
 }
 
 export function getSessionDirPath(): string {

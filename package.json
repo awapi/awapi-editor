@@ -79,9 +79,6 @@
     "url": "https://github.com/awapi/awapi-editor/issues"
   },
   "homepage": "https://github.com/awapi/awapi-editor#readme",
-  "overrides": {
-    "dompurify": "^3.4.1"
-  },
   "pnpm": {
     "onlyBuiltDependencies": [
       "electron",

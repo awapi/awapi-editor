@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard, webContents } from 'electron';
 
 // Set app name BEFORE any imports that use app.getPath()
 app.name = 'AwapiEditor';
@@ -6,6 +6,35 @@ app.name = 'AwapiEditor';
 import { dirname, join } from 'path';
 import * as fs from 'fs';
 import { checkForUpdates } from './updater';
+import { ZOOM_STEP, adjustZoom, resetZoom, clearZoomState } from './zoom';
+import { GO_TO_LINE_ACCELERATOR, SHORTCUTS_REFERENCE_ACCELERATOR } from './shortcuts';
+import { parseReadFileOptions } from './readFileOptions';
+import { createPopoutCloseGuard } from './popoutCloseGuard';
+import { createMainWindowCloseCoordinator } from './mainWindowCloseCoordinator';
+import { WatchRegistry, parseWatchEntries } from './watchRegistry';
+import { readFilesForOpen, formatOpenFailures } from './openFiles';
+import { ensureWindow, sendWhenLoaded } from './windowDelivery';
+import {
+  isWindowAlwaysOnTop,
+  setWindowAlwaysOnTop,
+  toggleWindowAlwaysOnTop,
+  syncAlwaysOnTopMenuItem,
+  appMenuAlwaysOnTopWindow,
+  ALWAYS_ON_TOP_MENU_ID,
+} from './alwaysOnTop';
+import {
+  type EncodingKind,
+  DEFAULT_ENCODING,
+  isEncodingKind,
+  decodeRawFileInput,
+  encodeTextToBuffer,
+} from './encoding';
+import {
+  markSelfSaved,
+  syncWatchedFiles,
+  refreshWatchedFile,
+  clearAllWatchedFiles,
+} from './fileWatcher';
 import { 
   loadAppSettings, 
   saveAppSettings, 
@@ -13,6 +42,10 @@ import {
   getDefaultBackupDir,
   saveSession, 
   loadSession,
+  getRecentFiles,
+  addRecentFile,
+  clearRecentFiles,
+  removeRecentFile,
   type AppSettings
 } from './session';
 
@@ -59,23 +92,36 @@ function fileArgFromArgv(argv: string[]): string | null {
   return null;
 }
 
-/** Send a file-open-from-args request to the renderer once it is ready. */
+/** Add `filePath` to "Open Recent" and refresh the application menu. */
+function recordRecentFile(filePath: string): void {
+  addRecentFile(filePath);
+  rebuildAppMenu();
+}
+
+/**
+ * Send a file-open request (OS "Open With", CLI argument, or File -> Open Recent)
+ * to the renderer once it is ready. These are user-initiated opens, so the file
+ * is recorded in "Open Recent" here, even if it is already open in a tab.
+ *
+ * Must only be called after `app` is ready: on macOS the app keeps running
+ * with no window, so the main window is re-created if needed.
+ */
 function sendFileToRenderer(filePath: string): void {
-  if (!mainWindow) return;
-  const send = () => mainWindow?.webContents.send('file:openFromArgs', filePath);
-  if (mainWindow.webContents.isLoading()) {
-    mainWindow.webContents.once('did-finish-load', send);
-  } else {
-    send();
-  }
+  const win = ensureWindow(mainWindow, () => {
+    createWindow();
+    return mainWindow!;
+  });
+  recordRecentFile(filePath);
+  sendWhenLoaded(win, 'file:openFromArgs', filePath);
 }
 
 // macOS: the OS sends this event when a file is opened via Finder / "Open With".
-// It may fire before or after app.whenReady(), so we capture it early.
+// It may fire before app.whenReady() (e.g. launching the app by opening a
+// file), so it is queued until startup creates the window.
 let pendingOpenFilePath: string | null = null;
 app.on('open-file', (event, filePath) => {
   event.preventDefault();
-  if (mainWindow) {
+  if (app.isReady()) {
     sendFileToRenderer(filePath);
   } else {
     pendingOpenFilePath = filePath;
@@ -112,20 +158,36 @@ function createWindow() {
     },
   });
 
-  // Close all popout windows when the main window is closed.
-  mainWindow.on('close', () => {
+  // Close all popout windows when the main window is closed. Pop-out tabs are
+  // not part of the session, so dirty pop-outs are asked to save first.
+  mainWindow.on('close', (event) => {
+    if (mainWindowCloseCoordinator.requestMainClose()) {
+      event.preventDefault();
+      return;
+    }
+    watchRegistry.clear();
+    clearAllWatchedFiles();
     for (const winId of popoutWindowIds) {
       const win = BrowserWindow.fromId(winId);
       win?.destroy();
     }
   });
+  // On macOS the app outlives its windows; drop the destroyed window so menu
+  // rebuilds (e.g. Clear Recent) don't touch it.
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
 
   // Handle Ctrl++ (Ctrl+Shift+=) for zoom in — the menu only registers Ctrl+=.
-  // before-input-event fires before Chromium or the menu processes the key.
-  mainWindow.webContents.on('before-input-event', (_event, input) => {
+  // before-input-event fires before Chromium or the menu processes the key,
+  // so preventDefault() stops the menu accelerator from firing a second time.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
     const ctrl = input.control || input.meta;
     if (!ctrl || input.type !== 'keyDown') return;
-    if (input.key === '+') adjustZoom(mainWindow!.webContents, +1);
+    if (input.key === '+') {
+      event.preventDefault();
+      adjustZoom(mainWindow!.webContents, ZOOM_STEP);
+    }
   });
 
   if (isDev) {
@@ -147,7 +209,8 @@ app.whenReady().then(() => {
     app.dock.setIcon(join(__dirname, '../../build/icon.png'));
   }
 
-  createWindow();
+  // An 'open-file' event right after 'ready' may already have created it.
+  if (!mainWindow) createWindow();
 
   // Open file passed as CLI argument (Windows/Linux "Open With" or terminal)
   const cliFile = fileArgFromArgv(process.argv);
@@ -181,21 +244,54 @@ ipcMain.handle('dialog:openFile', async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
   if (!win) return null;
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
-    properties: ['openFile'],
+    properties: ['openFile', 'multiSelections'],
   });
   if (canceled || filePaths.length === 0) return null;
 
-  const raw = fs.readFileSync(filePaths[0], 'utf-8');
-  const eol = detectEol(raw);
-  // Normalize to LF so Monaco has consistent line endings in memory.
-  return { filePath: filePaths[0], content: normalizeToLF(raw), eol };
+  const { files, failures } = readFilesForOpen(filePaths, (fp) => {
+    const raw = fs.readFileSync(fp);
+    const decoded = decodeRawFileInput(raw);
+    const eol = detectEol(decoded.content);
+    // Normalize to LF so Monaco has consistent line endings in memory.
+    return {
+      filePath: fp,
+      content: normalizeToLF(decoded.content),
+      eol,
+      encoding: decoded.encoding,
+    };
+  });
+
+  if (failures.length > 0) {
+    // Not awaited: the readable files open while the error is shown.
+    void dialog.showMessageBox(win, {
+      type: 'error',
+      title: 'Open File',
+      ...formatOpenFailures(failures),
+      noLink: true,
+    });
+  }
+  if (files.length === 0) return null;
+
+  for (const file of files) addRecentFile(file.filePath);
+  rebuildAppMenu();
+  return files;
 });
 
-ipcMain.handle('file:read', async (_, filePath: string) => {
+ipcMain.handle('file:read', async (_, filePath: string, rawOptions?: unknown) => {
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const eol = detectEol(raw);
-    return { filePath, content: normalizeToLF(raw), eol };
+    const options = parseReadFileOptions(rawOptions);
+    const raw = fs.readFileSync(filePath);
+    const decoded = decodeRawFileInput(raw, options.encoding);
+    const eol = detectEol(decoded.content);
+    if (options.trackRecent) {
+      recordRecentFile(filePath);
+    }
+    return {
+      filePath,
+      content: normalizeToLF(decoded.content),
+      eol,
+      encoding: decoded.encoding,
+    };
   } catch (error) {
     console.error('Failed to read file:', error);
     return null;
@@ -254,6 +350,108 @@ ipcMain.handle('settings:openInExplorer', async (_, dirPath: string) => {
   await shell.openPath(dirPath);
 });
 
+ipcMain.handle('file:showInFolder', async (_, filePath: string) => {
+  if (typeof filePath === 'string' && filePath) {
+    shell.showItemInFolder(filePath);
+  }
+});
+
+ipcMain.handle('clipboard:writeText', async (_, text: string) => {
+  if (typeof text === 'string') {
+    clipboard.writeText(text);
+  }
+});
+
+// ── External file watching ────────────────────────────────────────────────────
+// Every window (main and pop-outs) reports the files it has open. Watchers run
+// on the union, and each change is sent to the windows that have the file open.
+const watchRegistry = new WatchRegistry();
+
+function sendToFileOwners(filePath: string, channel: string, payload: unknown): void {
+  for (const ownerId of watchRegistry.ownersOf(filePath)) {
+    const wc = webContents.fromId(ownerId);
+    if (wc && !wc.isDestroyed()) wc.send(channel, payload);
+  }
+}
+
+const fileWatcherCallbacks = {
+  onFileChanged: (payload: { filePath: string }) => {
+    sendToFileOwners(payload.filePath, 'file:externalChange', payload);
+  },
+  onFileDeleted: (filePath: string) => {
+    sendToFileOwners(filePath, 'file:externalDelete', { filePath });
+  },
+};
+
+function resyncWatchedFiles(): void {
+  syncWatchedFiles(watchRegistry.entries(), fileWatcherCallbacks);
+}
+
+ipcMain.handle('file:watchSync', async (event, rawEntries: unknown) => {
+  const sender = event.sender;
+  const ownerId = sender.id;
+  if (!watchRegistry.has(ownerId)) {
+    sender.once('destroyed', () => {
+      watchRegistry.remove(ownerId);
+      resyncWatchedFiles();
+    });
+  }
+  watchRegistry.set(ownerId, parseWatchEntries(rawEntries));
+  resyncWatchedFiles();
+});
+
+ipcMain.handle('dialog:confirmReloadExternalChange', async (event, tabTitle: string) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (!win) return 'keep';
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question',
+    buttons: ['Reload from Disk', 'Keep My Changes'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'File Changed on Disk',
+    message: `"${tabTitle}" has been modified by another program.`,
+    detail: 'This tab has unsaved changes. Do you want to reload it from disk and discard your changes, or keep your edits?',
+    noLink: true,
+  });
+  return response === 0 ? 'reload' : 'keep';
+});
+
+ipcMain.handle(
+  'dialog:confirmLossyEncoding',
+  async (event, tabTitle: string, encodingLabel: string, count: number) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    if (!win) return false;
+    const n = Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: ['Save Anyway', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'Characters Will Be Lost',
+      message: `${n} character${n === 1 ? '' : 's'} in "${String(tabTitle)}" cannot be represented in ${String(encodingLabel)}.`,
+      detail: 'If you save, these characters will be replaced with "?". Choose a Unicode encoding (e.g. UTF-8) to keep them.',
+      noLink: true,
+    });
+    return response === 0;
+  },
+);
+
+ipcMain.handle('dialog:confirmReopenWithEncoding', async (event, tabTitle: string, encodingLabel: string) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (!win) return false;
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'warning',
+    buttons: ['Reopen', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    title: 'Reopen with Encoding',
+    message: `Reopen "${String(tabTitle)}" as ${String(encodingLabel)}?`,
+    detail: 'This tab has unsaved changes. Reopening reloads the file from disk and discards them.',
+    noLink: true,
+  });
+  return response === 0;
+});
+
 ipcMain.handle('dialog:confirmUnsavedChanges', async (event, tabTitle: string) => {
   const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
   if (!win) return 'cancel';
@@ -303,23 +501,32 @@ ipcMain.handle('print:preview', async (_, content: string, _language: string, ti
   }
 });
 
-ipcMain.handle('dialog:saveFile', async (event, filePath: string, content: string, eol?: EolKind) => {
-  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
-  if (!win) return null;
-  let targetPath = filePath;
+ipcMain.handle(
+  'dialog:saveFile',
+  async (event, filePath: string, content: string, eol?: EolKind, encoding?: EncodingKind) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    if (!win) return null;
+    let targetPath = filePath;
 
-  if (!targetPath) {
-    const { canceled, filePath: newPath } = await dialog.showSaveDialog(win, {
-      defaultPath: 'Untitled.txt',
-    });
-    if (canceled || !newPath) return null;
-    targetPath = newPath;
-  }
+    if (!targetPath) {
+      const { canceled, filePath: newPath } = await dialog.showSaveDialog(win, {
+        defaultPath: 'Untitled.txt',
+      });
+      if (canceled || !newPath) return null;
+      targetPath = newPath;
+    }
 
-  const normalized = applyEol(content, eol ?? 'LF');
-  fs.writeFileSync(targetPath, normalized, 'utf-8');
-  return targetPath;
-});
+    const normalized = applyEol(content, eol ?? 'LF');
+    const targetEncoding = isEncodingKind(encoding) ? encoding : DEFAULT_ENCODING;
+    const encodedBuffer = encodeTextToBuffer(normalized, targetEncoding);
+    markSelfSaved(targetPath);
+    fs.writeFileSync(targetPath, encodedBuffer);
+    refreshWatchedFile(targetPath);
+    addRecentFile(targetPath);
+    rebuildAppMenu();
+    return targetPath;
+  },
+);
 
 /**
  * Renames a file on disk. The renderer supplies the existing absolute path
@@ -360,7 +567,12 @@ ipcMain.handle('file:rename', async (_event, oldPath: string, newName: string) =
       return { ok: false as const, error: 'A file with that name already exists.' };
     }
 
+    markSelfSaved(oldPath);
+    markSelfSaved(newPath);
     fs.renameSync(oldPath, newPath);
+    removeRecentFile(oldPath);
+    addRecentFile(newPath);
+    rebuildAppMenu();
     return { ok: true as const, newPath };
   } catch (err) {
     return { ok: false as const, error: (err as Error).message };
@@ -376,6 +588,7 @@ interface PopoutTabData {
   isDirty?: boolean;
   language?: string;
   eol?: EolKind;
+  encoding?: EncodingKind;
 }
 
 // Holds tab data for each popout window until the renderer fetches it via
@@ -388,6 +601,45 @@ const popoutDataMap = new Map<number, PopoutTabData>();
 // the main window closes. (popoutDataMap entries are removed after data fetch,
 // so they can't be used for lifetime tracking.)
 const popoutWindowIds = new Set<number>();
+
+// Unsaved-change protection for pop-out windows (Cmd/Ctrl+W, menu, title-bar close).
+const popoutCloseGuard = createPopoutCloseGuard();
+
+/** Set by `before-quit` so a close deferred for pop-out prompts resumes quitting. */
+let quitRequested = false;
+app.on('before-quit', () => {
+  quitRequested = true;
+});
+
+function isPopoutRendererUnavailable(win: BrowserWindow): boolean {
+  const wc = win.webContents;
+  return wc.isDestroyed() || wc.isCrashed();
+}
+
+// Closing the main window first runs each dirty pop-out's Save / Don't Save /
+// Cancel prompt (one at a time) instead of destroying it with unsaved edits.
+const mainWindowCloseCoordinator = createMainWindowCloseCoordinator({
+  dirtyPopoutIds: () =>
+    Array.from(popoutWindowIds).filter((id) => {
+      const win = BrowserWindow.fromId(id);
+      return !!win && !win.isDestroyed() && popoutCloseGuard.shouldPreventClose(id, isPopoutRendererUnavailable(win));
+    }),
+  promptPopoutClose: (id) => {
+    const win = BrowserWindow.fromId(id);
+    if (!win || win.isDestroyed()) return false;
+    if (win.isMinimized()) win.restore();
+    win.focus();
+    win.close();
+    return true;
+  },
+  finishMainClose: () => {
+    // Deferred: this can run from inside the main window's 'close' handler.
+    setImmediate(() => {
+      if (quitRequested) app.quit();
+      else mainWindow?.close();
+    });
+  },
+});
 
 /** Builds a minimal menu for a single-file popout window.
  *  - No New / Open / Quit — those belong to the main window only.
@@ -427,6 +679,21 @@ function buildPopoutMenu(win: Electron.BrowserWindow): Electron.Menu {
         { type: 'separator' as const },
         { label: 'Find…',           accelerator: 'CmdOrCtrl+F',   click: () => send('menu:find') },
         { label: 'Replace…',        accelerator: 'CmdOrCtrl+H',   click: () => send('menu:replace') },
+        { label: 'Go to Line…',     accelerator: GO_TO_LINE_ACCELERATOR, click: () => send('menu:goToLine') },
+        { type: 'separator' as const },
+        {
+          label: 'Line & Text Operations',
+          submenu: [
+            { label: 'Sort Lines Ascending',       click: () => wc.send('menu:textOperation', 'sortLinesAsc') },
+            { label: 'Sort Lines Descending',      click: () => wc.send('menu:textOperation', 'sortLinesDesc') },
+            { label: 'Remove Duplicate Lines',     click: () => wc.send('menu:textOperation', 'removeDuplicateLines') },
+            { label: 'Remove Empty Lines',         click: () => wc.send('menu:textOperation', 'removeEmptyLines') },
+            { label: 'Trim Trailing Whitespace',   click: () => wc.send('menu:textOperation', 'trimTrailingWhitespace') },
+            { type: 'separator' as const },
+            { label: 'Convert to UPPERCASE',       click: () => wc.send('menu:textOperation', 'uppercase') },
+            { label: 'Convert to lowercase',       click: () => wc.send('menu:textOperation', 'lowercase') },
+          ],
+        },
         { type: 'separator' as const },
         { label: 'Format Document', accelerator: 'Shift+Alt+F',   click: () => send('menu:format') },
       ],
@@ -434,8 +701,20 @@ function buildPopoutMenu(win: Electron.BrowserWindow): Electron.Menu {
     {
       label: 'View',
       submenu: [
-        { label: 'Zoom In',    accelerator: 'CmdOrCtrl+=', click: () => adjustZoom(wc, +1) },
-        { label: 'Zoom Out',   accelerator: 'CmdOrCtrl+-', click: () => adjustZoom(wc, -1) },
+        {
+          label: 'Always on Top',
+          type: 'checkbox' as const,
+          checked: isWindowAlwaysOnTop(win),
+          click: () => {
+            toggleWindowAlwaysOnTop(win);
+            refreshAlwaysOnTopMenus(win);
+          },
+        },
+        { type: 'separator' as const },
+        { label: 'Toggle Whitespace & EOL', click: () => send('menu:toggleWhitespace') },
+        { type: 'separator' as const },
+        { label: 'Zoom In',    accelerator: 'CmdOrCtrl+=', click: () => adjustZoom(wc, ZOOM_STEP) },
+        { label: 'Zoom Out',   accelerator: 'CmdOrCtrl+-', click: () => adjustZoom(wc, -ZOOM_STEP) },
         { label: 'Reset Zoom', accelerator: 'CmdOrCtrl+0', click: () => resetZoom(wc) },
       ],
     },
@@ -466,17 +745,31 @@ ipcMain.handle('window:popout', async (_event, tabData: PopoutTabData) => {
   // Capture the webContents id now — by the time 'closed' fires the webContents
   // is already destroyed and accessing popoutWin.webContents.id would throw.
   const popoutWcId = popoutWin.webContents.id;
+  const popoutWinId = popoutWin.id;
+  // Every close path (menu accelerator, Close Window, title-bar button) ends up
+  // here. If the tab has unsaved changes, ask the renderer to run its
+  // Save / Don't Save / Cancel prompt; it calls 'window:confirmClose' to proceed.
+  popoutWin.on('close', (event) => {
+    if (!popoutCloseGuard.shouldPreventClose(popoutWinId, isPopoutRendererUnavailable(popoutWin))) return;
+    event.preventDefault();
+    popoutWin.webContents.send('window:closeRequested');
+  });
   popoutWin.on('closed', () => {
-    popoutDataMap.delete(popoutWin.id);
-    popoutWindowIds.delete(popoutWin.id);
-    zoomLevels.delete(popoutWcId);
+    popoutDataMap.delete(popoutWinId);
+    popoutWindowIds.delete(popoutWinId);
+    popoutCloseGuard.forget(popoutWinId);
+    clearZoomState(popoutWcId);
+    mainWindowCloseCoordinator.popoutClosed(popoutWinId);
   });
 
   // Handle Ctrl++ (Ctrl+Shift+=) for zoom in — the menu only registers Ctrl+=.
-  popoutWin.webContents.on('before-input-event', (_event, input) => {
+  popoutWin.webContents.on('before-input-event', (event, input) => {
     const ctrl = input.control || input.meta;
     if (!ctrl || input.type !== 'keyDown') return;
-    if (input.key === '+') adjustZoom(popoutWin.webContents, +1);
+    if (input.key === '+') {
+      event.preventDefault();
+      adjustZoom(popoutWin.webContents, ZOOM_STEP);
+    }
   });
 
   if (isDev) {
@@ -498,26 +791,78 @@ ipcMain.handle('popout:get-data', (event) => {
 
 ipcMain.handle('window:moveToMain', (event, tabData: PopoutTabData) => {
   mainWindow?.webContents.send('menu:addTab', tabData);
-  BrowserWindow.fromWebContents(event.sender)?.close();
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return;
+  // The tab (including unsaved edits) now lives in the main window.
+  popoutCloseGuard.approveClose(win.id);
+  win.close();
+});
+
+/** Pop-out renderers report whether their tab has unsaved changes. */
+ipcMain.handle('window:setDirty', (event, dirty: boolean) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || !popoutWindowIds.has(win.id)) return;
+  popoutCloseGuard.setDirty(win.id, dirty === true);
+});
+
+/**
+ * Called by a pop-out renderer when the user cancelled its close prompt. Aborts
+ * a pending main-window close (or quit) that was waiting on this pop-out.
+ */
+ipcMain.handle('window:cancelClose', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || !popoutWindowIds.has(win.id)) return;
+  quitRequested = false;
+  mainWindowCloseCoordinator.popoutCloseCancelled(win.id);
+});
+
+/** Called by a pop-out renderer once the user has resolved unsaved changes. */
+ipcMain.handle('window:confirmClose', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || !popoutWindowIds.has(win.id)) return;
+  popoutCloseGuard.approveClose(win.id);
+  win.close();
+});
+
+/**
+ * Refreshes the menus that show `win`'s Always on Top state: the pop-out's own
+ * menu (Windows/Linux) and the application menu checkbox (see appMenuAlwaysOnTopWindow).
+ */
+function refreshAlwaysOnTopMenus(win: BrowserWindow): void {
+  if (popoutWindowIds.has(win.id)) win.setMenu(buildPopoutMenu(win));
+  syncAlwaysOnTopMenuItem(
+    Menu.getApplicationMenu(),
+    appMenuAlwaysOnTopWindow(isMac, BrowserWindow.getFocusedWindow(), mainWindow),
+  );
+}
+
+app.on('browser-window-focus', (_event, win) => {
+  syncAlwaysOnTopMenuItem(Menu.getApplicationMenu(), appMenuAlwaysOnTopWindow(isMac, win, mainWindow));
+});
+
+ipcMain.handle('window:getAlwaysOnTop', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  return isWindowAlwaysOnTop(win);
+});
+
+ipcMain.handle('window:setAlwaysOnTop', (event, flag: boolean) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (!win) return false;
+  const next = setWindowAlwaysOnTop(win, flag);
+  refreshAlwaysOnTopMenus(win);
+  return next;
+});
+
+ipcMain.handle('window:toggleAlwaysOnTop', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (!win) return false;
+  const next = toggleWindowAlwaysOnTop(win);
+  refreshAlwaysOnTopMenus(win);
+  return next;
 });
 
 // Setup primitive app menu (can be fleshed out later)
 import { Menu } from 'electron';
-
-// Per-webContents zoom level (keyed by webContents.id) so each window zooms independently.
-const zoomLevels = new Map<number, number>();
-
-function adjustZoom(wc: Electron.WebContents, delta: number): void {
-  const current = zoomLevels.get(wc.id) ?? 0;
-  const next = Math.max(-9, Math.min(9, current + delta));
-  zoomLevels.set(wc.id, next);
-  wc.setZoomLevel(next);
-}
-
-function resetZoom(wc: Electron.WebContents): void {
-  zoomLevels.set(wc.id, 0);
-  wc.setZoomLevel(0);
-}
 
 const isMac = process.platform === 'darwin';
 
@@ -527,140 +872,235 @@ const isMac = process.platform === 'darwin';
 const asBrowserWindow = (win: Electron.BrowserWindow | Electron.BaseWindow | undefined): Electron.BrowserWindow | undefined =>
   win instanceof BrowserWindow ? win : undefined;
 
-const template: Electron.MenuItemConstructorOptions[] = [
-  // App Menu (macOS only)
-  ...(isMac
-    ? [{
-        label: app.name,
-        submenu: [
-          { role: 'about' as const },
-          { type: 'separator' as const },
-          {
-            label: 'Check for Updates…',
-            click: () => checkForUpdates({ notifyIfUpToDate: true, parentWindow: mainWindow })
-          },
-          { type: 'separator' as const },
-          { role: 'services' as const },
-          { type: 'separator' as const },
-          { role: 'hide' as const },
-          { role: 'hideOthers' as const },
-          { role: 'unhide' as const },
-          { type: 'separator' as const },
-          { role: 'quit' as const }
-        ]
-      }]
-    : []),
-  {
-    label: 'File',
-    submenu: [
-      { label: 'New', accelerator: 'CmdOrCtrl+N', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:new') },
-      { label: 'Open', accelerator: 'CmdOrCtrl+O', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:open') },
-      { label: 'Save', accelerator: 'CmdOrCtrl+S', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:save') },
-      { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:saveAs') },
-      { label: 'Pop Out to New Window', accelerator: 'CmdOrCtrl+Shift+N', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:popoutActiveTab') },
-      { type: 'separator' },
-      {
-        label: 'Preferences…',
-        accelerator: 'CmdOrCtrl+,',
-        click: () => mainWindow?.webContents.send('menu:openSettings'),
-      },
-      { type: 'separator' },
-      {
-        label: 'Print Preview…',
-        accelerator: 'CmdOrCtrl+Shift+P',
-        click: (_item, win) => { (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:printPreview'); }
-      },
-      {
-        label: 'Print…', accelerator: 'CmdOrCtrl+P', click: async () => {
-          if (!mainWindow) return;
-          const printers = await mainWindow.webContents.getPrintersAsync();
-          if (printers.length === 0) {
-            dialog.showErrorBox('No Printer Found', 'No printers are installed or available on this system.');
-            return;
-          }
-          const defaultPrinter = printers.find(p => (p as Electron.PrinterInfo & { isDefault?: boolean }).isDefault) ?? printers[0];
-          mainWindow.webContents.print(
-            { silent: false, printBackground: true, deviceName: defaultPrinter.name },
-            (success, failureReason) => { if (!success) console.error('Print failed:', failureReason); }
-          );
-        }
-      },
-      { type: 'separator' },
-      { role: 'quit' }
-    ]
-  },
-  {
-    label: 'Edit',
-    submenu: [
-      { role: 'undo' },
-      { role: 'redo' },
-      { type: 'separator' },
-      { role: 'cut' },
-      { role: 'copy' },
-      { role: 'paste' },
-      { type: 'separator' },
-      { label: 'Find...', accelerator: 'CmdOrCtrl+F', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:find') },
-      { label: 'Replace...', accelerator: 'CmdOrCtrl+H', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:replace') },
-      { type: 'separator' },
-      { label: 'Format Document', accelerator: 'Shift+Alt+F', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:format') },
-    ]
-  },
-  {
-    label: 'View',
-    submenu: [
-      { label: 'Zoom In',    accelerator: 'CmdOrCtrl+=', click: (_item, win) => adjustZoom((asBrowserWindow(win) ?? mainWindow)!.webContents, +1) },
-      { label: 'Zoom Out',   accelerator: 'CmdOrCtrl+-', click: (_item, win) => adjustZoom((asBrowserWindow(win) ?? mainWindow)!.webContents, -1) },
-      { label: 'Reset Zoom', accelerator: 'CmdOrCtrl+0', click: (_item, win) => resetZoom((asBrowserWindow(win) ?? mainWindow)!.webContents) },
-      { type: 'separator' },
-      { label: 'Pop Out Active Tab to New Window', accelerator: 'CmdOrCtrl+Shift+N', click: () => mainWindow?.webContents.send('menu:popoutActiveTab') },
-      { type: 'separator' },
-      { role: 'reload' },
-      { role: 'toggleDevTools' },
-    ]
-  },
-  {
-    role: 'help',
-    submenu: [
-      {
-        label: 'Show All Commands',
-        accelerator: 'F1',
-        click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:showAllCommands')
-      },
-      { type: 'separator' },
-      {
-        label: 'Check for Updates\u2026',
-        click: () => checkForUpdates({ notifyIfUpToDate: true, parentWindow: mainWindow })
-      },
-      { type: 'separator' },
-      {
-        label: 'About',
-        click: async () => {
-          const { response } = await dialog.showMessageBox(mainWindow ?? undefined!, {
-            type: 'info',
-            title: 'About AwapiEditor',
-            message: 'AwapiEditor',
-            detail: [
-              `Version: ${app.getVersion()}`,
-              `Electron: ${process.versions.electron}`,
-              `Chrome: ${process.versions.chrome}`,
-              `Node.js: ${process.versions.node}`,
-              `Platform: ${process.platform} ${process.arch}`,
-              '',
-              'A fast, lightweight, universal text editor.',
-              'github.com/awapi/awapi-editor',
-              '',
-              'Maintainer: Omer Yesil',
-              'github.com/omeryesil',
-            ].join('\n'),
-            buttons: ['OK', 'Open Repo', 'Open Profile'],
-          });
-          if (response === 1) shell.openExternal('https://github.com/awapi/awapi-editor');
-          if (response === 2) shell.openExternal('https://github.com/omeryesil');
-        }
-      }
-    ]
+function buildRecentFilesSubmenu(): Electron.MenuItemConstructorOptions[] {
+  const recentFiles = getRecentFiles();
+  if (recentFiles.length === 0) {
+    return [{ label: 'No Recent Files', enabled: false }];
   }
-];
 
-const menu = Menu.buildFromTemplate(template);
-Menu.setApplicationMenu(menu);
+  return [
+    ...recentFiles.map((filePath): Electron.MenuItemConstructorOptions => ({
+      label: filePath,
+      click: () => {
+        if (!fs.existsSync(filePath)) {
+          removeRecentFile(filePath);
+          rebuildAppMenu();
+          dialog.showErrorBox('File Not Found', `The file "${filePath}" no longer exists on disk.`);
+          return;
+        }
+        sendFileToRenderer(filePath);
+      },
+    })),
+    { type: 'separator' },
+    {
+      label: 'Clear Recent',
+      click: () => {
+        clearRecentFiles();
+        rebuildAppMenu();
+      },
+    },
+  ];
+}
+
+function rebuildAppMenu(): void {
+  const template: Electron.MenuItemConstructorOptions[] = [
+    // App Menu (macOS only)
+    ...(isMac
+      ? [{
+          label: app.name,
+          submenu: [
+            { role: 'about' as const },
+            { type: 'separator' as const },
+            {
+              label: 'Check for Updates…',
+              click: () => checkForUpdates({ notifyIfUpToDate: true, parentWindow: mainWindow })
+            },
+            { type: 'separator' as const },
+            { role: 'services' as const },
+            { type: 'separator' as const },
+            { role: 'hide' as const },
+            { role: 'hideOthers' as const },
+            { role: 'unhide' as const },
+            { type: 'separator' as const },
+            { role: 'quit' as const }
+          ]
+        }]
+      : []),
+    {
+      label: 'File',
+      submenu: [
+        { label: 'New', accelerator: 'CmdOrCtrl+N', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:new') },
+        { label: 'Open', accelerator: 'CmdOrCtrl+O', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:open') },
+        { label: 'Open Recent', submenu: buildRecentFilesSubmenu() },
+        { label: 'Save', accelerator: 'CmdOrCtrl+S', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:save') },
+        { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:saveAs') },
+        { label: 'Save All', accelerator: 'CmdOrCtrl+Shift+Alt+S', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:saveAll') },
+        { type: 'separator' },
+        {
+          label: 'Close Tab',
+          accelerator: 'CmdOrCtrl+W',
+          click: (_item, win) => {
+            const targetWin = asBrowserWindow(win) ?? mainWindow;
+            if (targetWin && popoutWindowIds.has(targetWin.id)) {
+              // Pop-outs hold a single tab; closing goes through the window's
+              // 'close' guard, which prompts about unsaved changes.
+              targetWin.close();
+            } else {
+              targetWin?.webContents.send('menu:closeTab');
+            }
+          },
+        },
+        {
+          label: 'Reopen Closed Tab',
+          accelerator: 'CmdOrCtrl+Shift+T',
+          click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:reopenClosedTab'),
+        },
+        { label: 'Pop Out to New Window', accelerator: 'CmdOrCtrl+Shift+N', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:popoutActiveTab') },
+        { type: 'separator' },
+        {
+          label: 'Preferences…',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => mainWindow?.webContents.send('menu:openSettings'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Print Preview…',
+          accelerator: 'CmdOrCtrl+Shift+P',
+          click: (_item, win) => { (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:printPreview'); }
+        },
+        {
+          label: 'Print…', accelerator: 'CmdOrCtrl+P', click: async () => {
+            if (!mainWindow) return;
+            const printers = await mainWindow.webContents.getPrintersAsync();
+            if (printers.length === 0) {
+              dialog.showErrorBox('No Printer Found', 'No printers are installed or available on this system.');
+              return;
+            }
+            const defaultPrinter = printers.find(p => (p as Electron.PrinterInfo & { isDefault?: boolean }).isDefault) ?? printers[0];
+            mainWindow.webContents.print(
+              { silent: false, printBackground: true, deviceName: defaultPrinter.name },
+              (success, failureReason) => { if (!success) console.error('Print failed:', failureReason); }
+            );
+          }
+        },
+        { type: 'separator' },
+        { role: 'quit' }
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { type: 'separator' },
+        { label: 'Find...', accelerator: 'CmdOrCtrl+F', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:find') },
+        { label: 'Replace...', accelerator: 'CmdOrCtrl+H', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:replace') },
+        { label: 'Find in All Open Tabs...', accelerator: 'CmdOrCtrl+Shift+F', click: () => mainWindow?.webContents.send('menu:findInTabs') },
+        { label: 'Go to Line...', accelerator: GO_TO_LINE_ACCELERATOR, click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:goToLine') },
+        { type: 'separator' },
+        {
+          label: 'Line & Text Operations',
+          submenu: [
+            { label: 'Sort Lines Ascending', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:textOperation', 'sortLinesAsc') },
+            { label: 'Sort Lines Descending', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:textOperation', 'sortLinesDesc') },
+            { label: 'Remove Duplicate Lines', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:textOperation', 'removeDuplicateLines') },
+            { label: 'Remove Empty Lines', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:textOperation', 'removeEmptyLines') },
+            { label: 'Trim Trailing Whitespace', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:textOperation', 'trimTrailingWhitespace') },
+            { type: 'separator' },
+            { label: 'Convert to UPPERCASE', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:textOperation', 'uppercase') },
+            { label: 'Convert to lowercase', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:textOperation', 'lowercase') },
+          ]
+        },
+        { type: 'separator' },
+        { label: 'Format Document', accelerator: 'Shift+Alt+F', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:format') },
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        {
+          id: ALWAYS_ON_TOP_MENU_ID,
+          label: 'Always on Top',
+          type: 'checkbox',
+          checked: isWindowAlwaysOnTop(appMenuAlwaysOnTopWindow(isMac, BrowserWindow.getFocusedWindow(), mainWindow)),
+          click: (_item, win) => {
+            const targetWin = asBrowserWindow(win) ?? mainWindow;
+            if (!targetWin) return;
+            toggleWindowAlwaysOnTop(targetWin);
+            refreshAlwaysOnTopMenus(targetWin);
+          },
+        },
+        { type: 'separator' },
+        { label: 'Toggle Split View', click: () => mainWindow?.webContents.send('menu:toggleSplitView') },
+        { label: 'Toggle Diff View', click: () => mainWindow?.webContents.send('menu:toggleDiffView') },
+        { type: 'separator' },
+        { label: 'Toggle Whitespace & EOL', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:toggleWhitespace') },
+        { type: 'separator' },
+        { label: 'Zoom In',    accelerator: 'CmdOrCtrl+=', click: (_item, win) => adjustZoom((asBrowserWindow(win) ?? mainWindow)!.webContents, ZOOM_STEP) },
+        { label: 'Zoom Out',   accelerator: 'CmdOrCtrl+-', click: (_item, win) => adjustZoom((asBrowserWindow(win) ?? mainWindow)!.webContents, -ZOOM_STEP) },
+        { label: 'Reset Zoom', accelerator: 'CmdOrCtrl+0', click: (_item, win) => resetZoom((asBrowserWindow(win) ?? mainWindow)!.webContents) },
+        { type: 'separator' },
+        { label: 'Pop Out Active Tab to New Window', accelerator: 'CmdOrCtrl+Shift+N', click: () => mainWindow?.webContents.send('menu:popoutActiveTab') },
+        { type: 'separator' },
+        { role: 'reload' },
+        { role: 'toggleDevTools' },
+      ]
+    },
+    {
+      role: 'help',
+      submenu: [
+        {
+          label: 'Keyboard Shortcuts…',
+          accelerator: SHORTCUTS_REFERENCE_ACCELERATOR,
+          click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:openShortcuts'),
+        },
+        {
+          label: 'Show All Commands',
+          accelerator: 'F1',
+          click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:showAllCommands')
+        },
+        { type: 'separator' },
+        {
+          label: 'Check for Updates\u2026',
+          click: () => checkForUpdates({ notifyIfUpToDate: true, parentWindow: mainWindow })
+        },
+        { type: 'separator' },
+        {
+          label: 'About',
+          click: async () => {
+            const { response } = await dialog.showMessageBox(mainWindow ?? undefined!, {
+              type: 'info',
+              title: 'About AwapiEditor',
+              message: 'AwapiEditor',
+              detail: [
+                `Version: ${app.getVersion()}`,
+                `Electron: ${process.versions.electron}`,
+                `Chrome: ${process.versions.chrome}`,
+                `Node.js: ${process.versions.node}`,
+                `Platform: ${process.platform} ${process.arch}`,
+                '',
+                'A fast, lightweight, universal text editor.',
+                'github.com/awapi/awapi-editor',
+                '',
+                'Maintainer: Omer Yesil',
+                'github.com/omeryesil',
+              ].join('\n'),
+              buttons: ['OK', 'Open Repo', 'Open Profile'],
+            });
+            if (response === 1) shell.openExternal('https://github.com/awapi/awapi-editor');
+            if (response === 2) shell.openExternal('https://github.com/omeryesil');
+          }
+        }
+      ]
+    }
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+}
+
+rebuildAppMenu();

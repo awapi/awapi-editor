@@ -66,6 +66,10 @@ const mockEditorInstance = {
   getValue: vi.fn(() => mockEditorValue),
   getPosition: vi.fn(() => mockCursorPosition),
   getSelection: vi.fn(() => mockSelection),
+  setPosition: vi.fn(),
+  setSelection: vi.fn(),
+  revealLineInCenter: vi.fn(),
+  focus: vi.fn(),
   getModel: vi.fn(() => ({
     getValueLengthInRange: vi.fn(() => mockSelectionCharCount),
     getValueInRange: vi.fn(() => 'x'.repeat(mockSelectionCharCount)),
@@ -92,6 +96,8 @@ const mockEditorInstance = {
   }),
 };
 
+let capturedDiffProps: any = undefined;
+
 vi.mock('@monaco-editor/react', () => ({
   default: vi.fn((props: any) => {
     capturedEditorOnChange = props.onChange;
@@ -101,26 +107,50 @@ vi.mock('@monaco-editor/react', () => ({
     }, []);
     return null;
   }),
+  DiffEditor: vi.fn((props: any) => {
+    capturedDiffProps = props;
+    return <div data-testid="mock-monaco-diff-editor" />;
+  }),
 }));
 
 describe('Editor Core Tests', () => {
   beforeEach(() => {
     resetMonacoMockState();
+    capturedDiffProps = undefined;
     (window as any).electronAPI = {
       onNewFile: vi.fn(),
       onOpenFile: vi.fn(),
       onSaveFile: vi.fn(),
       onSaveAsFile: vi.fn(),
+      onSaveAllFiles: vi.fn(),
       onCloseTab: vi.fn(),
+      onReopenClosedTab: vi.fn(),
       onFind: vi.fn(),
       onReplace: vi.fn(),
+      onFindInTabs: vi.fn(),
+      onGoToLine: vi.fn(),
+      onToggleWhitespace: vi.fn(),
+      onToggleSplitView: vi.fn(),
+      onToggleDiffView: vi.fn(),
+      getAlwaysOnTop: vi.fn().mockResolvedValue(false),
+      setAlwaysOnTop: vi.fn().mockResolvedValue(true),
+      toggleAlwaysOnTop: vi.fn().mockResolvedValue(true),
+      onAlwaysOnTopChanged: vi.fn(),
+      onTextOperation: vi.fn(),
       onFormat: vi.fn(),
       onThemeChange: vi.fn(),
       onPrintPreview: vi.fn(),
       onOpenSettings: vi.fn(),
+      onOpenShortcuts: vi.fn(),
       onShowAllCommands: vi.fn(),
       onOpenFileFromArgs: vi.fn(),
       onPopoutActiveTab: vi.fn(),
+      onExternalFileChange: vi.fn(),
+      onExternalFileDelete: vi.fn(),
+      syncWatchedFiles: vi.fn().mockResolvedValue(undefined),
+      confirmReloadExternalChange: vi.fn().mockResolvedValue('reload'),
+      showItemInFolder: vi.fn().mockResolvedValue(undefined),
+      copyToClipboard: vi.fn().mockResolvedValue(undefined),
       removeListeners: vi.fn(),
       readFile: vi.fn().mockResolvedValue({ filePath: '/mock/path/file.txt', content: 'mock content' }),
       saveSession: vi.fn().mockResolvedValue(true),
@@ -269,6 +299,45 @@ describe('Editor Core Tests', () => {
     await waitFor(() => expect(capturedCallback).not.toBeNull());
     capturedCallback!('/tmp/arg-file.txt');
     await waitFor(() => expect(screen.getByText('arg-file.txt')).toBeTruthy());
+    // Main records OS/CLI opens itself; the renderer must not request tracking again.
+    expect((window as any).electronAPI.readFile).toHaveBeenCalledWith('/tmp/arg-file.txt');
+  });
+
+  it('only asks main to track recent files for user-initiated drops, not session restore (CR-03)', async () => {
+    (window as any).electronAPI.loadSession.mockResolvedValueOnce({
+      activeTabId: 'tab-restored',
+      tabs: [{
+        id: 'tab-restored',
+        title: 'restored.txt',
+        filePath: '/tmp/restored.txt',
+        content: 'restored',
+        isDirty: false,
+        eol: 'LF',
+      }],
+    });
+    (window as any).electronAPI.readFile = vi.fn().mockImplementation(async (fp: string) => ({
+      filePath: fp, content: `content of ${fp}`, eol: 'LF',
+    }));
+    (window as any).electronAPI.getPathForFile = vi.fn(() => '/tmp/dropped.txt');
+
+    render(<ThemeProvider><App /></ThemeProvider>);
+    await waitFor(() => screen.getByText('restored.txt'));
+
+    expect((window as any).electronAPI.readFile).toHaveBeenCalledWith('/tmp/restored.txt');
+    expect((window as any).electronAPI.readFile).not.toHaveBeenCalledWith(
+      '/tmp/restored.txt',
+      expect.objectContaining({ trackRecent: true }),
+    );
+
+    const file = new File(['x'], 'dropped.txt', { type: 'text/plain' });
+    const dropEvent = new Event('drop', { bubbles: true, cancelable: true }) as any;
+    dropEvent.dataTransfer = { types: ['Files'], files: [file] };
+    await act(async () => {
+      window.dispatchEvent(dropEvent);
+    });
+
+    await waitFor(() => screen.getByText('dropped.txt'));
+    expect((window as any).electronAPI.readFile).toHaveBeenCalledWith('/tmp/dropped.txt', { trackRecent: true });
   });
 
   it('should switch to existing tab if onOpenFileFromArgs fires with already-open file', async () => {
@@ -989,6 +1058,953 @@ describe('Editor Core Tests', () => {
       fireEvent.contextMenu(tab);
       expect(screen.getByTestId('tab-context-theme-default').getAttribute('aria-checked')).toBe('true');
       expect(screen.getByTestId('tab-context-theme-dark').getAttribute('aria-checked')).toBe('false');
+    });
+  });
+
+  describe('close active tab (Cmd/Ctrl+W) & reopen closed tab (Cmd/Ctrl+Shift+T)', () => {
+    const makeSession = () => ({
+      activeTabId: 'tab-2',
+      tabs: [
+        { id: 'tab-1', title: 'alpha.txt', filePath: '/tmp/alpha.txt', content: 'aaa', isDirty: false, eol: 'LF' },
+        { id: 'tab-2', title: 'beta.txt',  filePath: '/tmp/beta.txt',  content: 'bbb', isDirty: false, eol: 'LF' },
+        { id: 'tab-3', title: 'gamma.txt', filePath: '/tmp/gamma.txt', content: 'ccc', isDirty: false, eol: 'LF' },
+      ],
+    });
+
+    beforeEach(() => {
+      (window as any).electronAPI.loadSession.mockResolvedValue(makeSession());
+      (window as any).electronAPI.readFile = vi.fn().mockImplementation(async (fp: string) => ({
+        filePath: fp,
+        content: fp.includes('alpha') ? 'aaa' : fp.includes('beta') ? 'bbb' : 'ccc',
+        eol: 'LF',
+      }));
+    });
+
+    it('closes the active tab when onCloseTab fires', async () => {
+      let closeTabCb: (() => void) | null = null;
+      (window as any).electronAPI.onCloseTab = vi.fn((cb: () => void) => {
+        closeTabCb = cb;
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('beta.txt'));
+      await waitFor(() => expect(closeTabCb).not.toBeNull());
+
+      act(() => {
+        closeTabCb!();
+      });
+
+      await waitFor(() => expect(screen.queryByText('beta.txt')).toBeNull());
+      expect(screen.getByText('alpha.txt')).toBeTruthy();
+      expect(screen.getByText('gamma.txt')).toBeTruthy();
+    });
+
+    it('reopens recently closed tabs in LIFO order when onReopenClosedTab fires', async () => {
+      let closeTabCb: (() => void) | null = null;
+      let reopenTabCb: (() => void) | null = null;
+      (window as any).electronAPI.onCloseTab = vi.fn((cb: () => void) => {
+        closeTabCb = cb;
+      });
+      (window as any).electronAPI.onReopenClosedTab = vi.fn((cb: () => void) => {
+        reopenTabCb = cb;
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('beta.txt'));
+      await waitFor(() => screen.getByText('gamma.txt'));
+      await waitFor(() => expect(closeTabCb).not.toBeNull());
+      await waitFor(() => expect(reopenTabCb).not.toBeNull());
+
+      // Close active tab (beta.txt), then close new active tab (gamma.txt)
+      act(() => { closeTabCb!(); });
+      await waitFor(() => expect(screen.queryByText('beta.txt')).toBeNull());
+
+      act(() => { closeTabCb!(); });
+      await waitFor(() => expect(screen.queryByText('gamma.txt')).toBeNull());
+
+      // First reopen should restore gamma.txt (last closed)
+      act(() => { reopenTabCb!(); });
+      await waitFor(() => expect(screen.getByText('gamma.txt')).toBeTruthy());
+      expect(screen.queryByText('beta.txt')).toBeNull();
+
+      // Second reopen should restore beta.txt
+      act(() => { reopenTabCb!(); });
+      await waitFor(() => expect(screen.getByText('beta.txt')).toBeTruthy());
+    });
+
+    it('enables Reopen Closed Tab in the tab context menu after closing a tab and restores it on click', async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+      await waitFor(() => screen.getByText('beta.txt'));
+
+      const alphaTab = screen.getByText('alpha.txt').closest('div[draggable]') as HTMLElement;
+      fireEvent.contextMenu(alphaTab);
+
+      // Initially no closed tabs -> disabled
+      const reopenItemInitial = screen.getByTestId('tab-context-reopen-closed');
+      expect(reopenItemInitial.getAttribute('aria-disabled')).toBe('true');
+
+      // Close beta.txt via context menu
+      const betaTab = screen.getByText('beta.txt').closest('div[draggable]') as HTMLElement;
+      fireEvent.contextMenu(betaTab);
+      fireEvent.click(screen.getByTestId('tab-context-close'));
+      await waitFor(() => expect(screen.queryByText('beta.txt')).toBeNull());
+
+      // Open context menu on alpha.txt -> Reopen Closed Tab is now enabled
+      fireEvent.contextMenu(alphaTab);
+      const reopenItemAfter = screen.getByTestId('tab-context-reopen-closed');
+      expect(reopenItemAfter.getAttribute('aria-disabled')).toBe('false');
+
+      fireEvent.click(reopenItemAfter);
+      await waitFor(() => expect(screen.getByText('beta.txt')).toBeTruthy());
+    });
+
+    it('shows shortcut tooltips on tab bar buttons and opens Keyboard Shortcuts modal on onOpenShortcuts', async () => {
+      let openShortcutsCb: (() => void) | null = null;
+      (window as any).electronAPI.onOpenShortcuts = vi.fn((cb: () => void) => {
+        openShortcutsCb = cb;
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+
+      expect(screen.getByTestId('add-tab-button').title).toBe('New Tab (Ctrl+N)');
+      expect(screen.getByTestId('close-tab-btn-tab-1').title).toBe('Close Tab (Ctrl+W)');
+
+      await waitFor(() => expect(openShortcutsCb).not.toBeNull());
+      act(() => {
+        openShortcutsCb!();
+      });
+
+      await waitFor(() => expect(screen.getByTestId('shortcuts-modal')).toBeTruthy());
+    });
+  });
+
+  describe('Phase 1 — File & Tab Workflow (Multi-file Open, Save All, Path Utilities, External Watch)', () => {
+    it('opens multiple files at once when openFileDialog returns multiple files', async () => {
+      let openFileCb: (() => void) | null = null;
+      (window as any).electronAPI.onOpenFile = vi.fn((cb: () => void) => {
+        openFileCb = cb;
+      });
+      (window as any).electronAPI.openFileDialog = vi.fn().mockResolvedValue([
+        { filePath: '/tmp/one.txt', content: 'one', eol: 'LF' },
+        { filePath: '/tmp/two.txt', content: 'two', eol: 'CRLF' },
+      ]);
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => expect(openFileCb).not.toBeNull());
+
+      await act(async () => {
+        await openFileCb!();
+      });
+
+      await waitFor(() => expect(screen.getByText('one.txt')).toBeTruthy());
+      expect(screen.getByText('two.txt')).toBeTruthy();
+    });
+
+    it('does nothing when openFileDialog resolves null or an empty list (CR-13)', async () => {
+      let openFileCb: (() => void) | null = null;
+      (window as any).electronAPI.onOpenFile = vi.fn((cb: () => void) => {
+        openFileCb = cb;
+      });
+      (window as any).electronAPI.openFileDialog = vi.fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce([]);
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => expect(openFileCb).not.toBeNull());
+      await waitFor(() => screen.getByText(/Untitled/));
+      const tabCount = screen.getAllByTestId(/^close-tab-btn-/).length;
+
+      await act(async () => {
+        await openFileCb!();
+        await openFileCb!();
+      });
+
+      expect((window as any).electronAPI.openFileDialog).toHaveBeenCalledTimes(2);
+      expect(screen.getAllByTestId(/^close-tab-btn-/).length).toBe(tabCount);
+    });
+
+    it('Save All saves all dirty tabs and leaves clean tabs untouched', async () => {
+      let saveAllCb: (() => void) | null = null;
+      (window as any).electronAPI.onSaveAllFiles = vi.fn((cb: () => void) => {
+        saveAllCb = cb;
+      });
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'dirty1.txt', filePath: '/tmp/dirty1.txt', content: 'new1', isDirty: true, eol: 'LF' },
+          { id: 'tab-2', title: 'clean.txt',  filePath: '/tmp/clean.txt',  content: 'clean', isDirty: false, eol: 'LF' },
+          { id: 'tab-3', title: 'dirty2.txt', filePath: '/tmp/dirty2.txt', content: 'new2', isDirty: true, eol: 'CRLF' },
+        ],
+      });
+      (window as any).electronAPI.readFile = vi.fn().mockResolvedValue({
+        filePath: '/tmp/clean.txt',
+        content: 'clean',
+        eol: 'LF',
+      });
+      (window as any).electronAPI.saveFileDialog = vi.fn().mockImplementation(async (fp: string) => fp);
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/dirty1\.txt.*\*/));
+      await waitFor(() => screen.getByText(/dirty2\.txt.*\*/));
+      await waitFor(() => expect(saveAllCb).not.toBeNull());
+
+      await act(async () => {
+        await saveAllCb!();
+      });
+
+      expect((window as any).electronAPI.saveFileDialog).toHaveBeenCalledTimes(2);
+      expect((window as any).electronAPI.saveFileDialog).toHaveBeenCalledWith('/tmp/dirty1.txt', 'new1', 'LF');
+      expect((window as any).electronAPI.saveFileDialog).toHaveBeenCalledWith('/tmp/dirty2.txt', 'new2', 'CRLF');
+      await waitFor(() => expect(screen.queryByText(/\*/)).toBeNull());
+    });
+
+    it('supports Copy Full Path, Copy Filename, and Reveal in Finder / Explorer in tab context menu', async () => {
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'alpha.txt', filePath: '/tmp/alpha.txt', content: 'aaa', isDirty: false, eol: 'LF' },
+          { id: 'tab-2', title: 'Untitled',  filePath: null,             content: '',    isDirty: false, eol: 'LF' },
+        ],
+      });
+      (window as any).electronAPI.readFile = vi.fn().mockResolvedValue({
+        filePath: '/tmp/alpha.txt',
+        content: 'aaa',
+        eol: 'LF',
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+
+      const alphaTab = screen.getByText('alpha.txt').closest('div[draggable]') as HTMLElement;
+
+      fireEvent.contextMenu(alphaTab);
+      fireEvent.click(screen.getByTestId('tab-context-copy-path'));
+      await waitFor(() => expect((window as any).electronAPI.copyToClipboard).toHaveBeenCalledWith('/tmp/alpha.txt'));
+
+      fireEvent.contextMenu(alphaTab);
+      fireEvent.click(screen.getByTestId('tab-context-copy-filename'));
+      await waitFor(() => expect((window as any).electronAPI.copyToClipboard).toHaveBeenCalledWith('alpha.txt'));
+
+      fireEvent.contextMenu(alphaTab);
+      fireEvent.click(screen.getByTestId('tab-context-reveal-in-folder'));
+      await waitFor(() => expect((window as any).electronAPI.showItemInFolder).toHaveBeenCalledWith('/tmp/alpha.txt'));
+
+      // For Untitled tab, Copy Full Path and Reveal in Folder are disabled
+      const untitledTab = screen.getByText('Untitled').closest('div[draggable]') as HTMLElement;
+      fireEvent.contextMenu(untitledTab);
+      expect(screen.getByTestId('tab-context-copy-path').getAttribute('aria-disabled')).toBe('true');
+      expect(screen.getByTestId('tab-context-reveal-in-folder').getAttribute('aria-disabled')).toBe('true');
+      expect(screen.getByTestId('tab-context-copy-filename').getAttribute('aria-disabled')).toBeNull();
+    });
+
+    it('auto-reloads clean tabs on external change, prompts on dirty tabs, and marks deleted files dirty', async () => {
+      let extChangeCb: ((data: { filePath: string; content: string; eol: 'LF' | 'CRLF' }) => void) | null = null;
+      let extDeleteCb: ((data: { filePath: string }) => void) | null = null;
+      (window as any).electronAPI.onExternalFileChange = vi.fn((cb) => { extChangeCb = cb; });
+      (window as any).electronAPI.onExternalFileDelete = vi.fn((cb) => { extDeleteCb = cb; });
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'clean.txt', filePath: '/tmp/clean.txt', content: 'old', isDirty: false, eol: 'LF' },
+          { id: 'tab-2', title: 'dirty.txt', filePath: '/tmp/dirty.txt', content: 'my edits', isDirty: true, eol: 'LF' },
+        ],
+      });
+      (window as any).electronAPI.readFile = vi.fn().mockResolvedValue({
+        filePath: '/tmp/clean.txt',
+        content: 'old',
+        eol: 'LF',
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('clean.txt'));
+      await waitFor(() => expect(extChangeCb).not.toBeNull());
+      await waitFor(() => expect(extDeleteCb).not.toBeNull());
+
+      // Sync watched files should have been called with both file paths
+      expect((window as any).electronAPI.syncWatchedFiles).toHaveBeenCalledWith([
+        { filePath: '/tmp/clean.txt', encoding: 'utf-8' },
+        { filePath: '/tmp/dirty.txt', encoding: 'utf-8' },
+      ]);
+
+      // 1. Clean tab auto-reloads without prompting
+      await act(async () => {
+        await extChangeCb!({ filePath: '/tmp/clean.txt', content: 'externally updated!', eol: 'LF' });
+      });
+      expect((window as any).electronAPI.confirmReloadExternalChange).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.getByTestId('status-total-characters').textContent).toBe('Chars 19'));
+
+      // 2. Dirty tab prompts user; when user chooses 'reload', dirty flag clears
+      (window as any).electronAPI.confirmReloadExternalChange = vi.fn().mockResolvedValue('reload');
+      await act(async () => {
+        await extChangeCb!({ filePath: '/tmp/dirty.txt', content: 'disk version', eol: 'LF' });
+      });
+      expect((window as any).electronAPI.confirmReloadExternalChange).toHaveBeenCalledWith('dirty.txt');
+      await waitFor(() => expect(screen.queryByText(/dirty\.txt.*\*/)).toBeNull());
+
+      // 3. External file deletion marks clean.txt as dirty
+      act(() => {
+        extDeleteCb!({ filePath: '/tmp/clean.txt' });
+      });
+      await waitFor(() => expect(screen.getByText(/clean\.txt.*\*/)).toBeTruthy());
+    });
+
+    it('shows one reload prompt per dirty file and applies the latest disk content (CR-16)', async () => {
+      let extChangeCb: ((data: { filePath: string; content: string; eol: 'LF' | 'CRLF' }) => Promise<void>) | null = null;
+      (window as any).electronAPI.onExternalFileChange = vi.fn((cb) => { extChangeCb = cb; });
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'dirty.txt', filePath: '/tmp/dirty.txt', content: 'my edits', isDirty: true, eol: 'LF' },
+        ],
+      });
+      let resolvePrompt: (decision: 'reload' | 'keep') => void = () => {};
+      const confirmReload = vi.fn(
+        () => new Promise<'reload' | 'keep'>(resolve => { resolvePrompt = resolve; }),
+      );
+      (window as any).electronAPI.confirmReloadExternalChange = confirmReload;
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/dirty\.txt/));
+      await waitFor(() => expect(extChangeCb).not.toBeNull());
+
+      let first: Promise<void> | undefined;
+      await act(async () => {
+        first = extChangeCb!({ filePath: '/tmp/dirty.txt', content: 'disk v1', eol: 'LF' });
+        await extChangeCb!({ filePath: '/tmp/dirty.txt', content: 'disk v2', eol: 'LF' });
+        await extChangeCb!({ filePath: '/tmp/dirty.txt', content: 'disk version 3', eol: 'LF' });
+      });
+      expect(confirmReload).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolvePrompt('reload');
+        await first;
+      });
+      await waitFor(() => expect(screen.getByTestId('status-total-characters').textContent).toBe('Chars 14'));
+      expect(screen.queryByText(/dirty\.txt.*\*/)).toBeNull();
+
+      // Once the prompt is resolved, a later change on a dirty tab prompts again.
+      act(() => {
+        capturedEditorOnChange!('new local edits');
+      });
+      await waitFor(() => expect(screen.getByText(/dirty\.txt.*\*/)).toBeTruthy());
+      let second: Promise<void> | undefined;
+      await act(async () => {
+        second = extChangeCb!({ filePath: '/tmp/dirty.txt', content: 'disk v4', eol: 'LF' });
+      });
+      expect(confirmReload).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        resolvePrompt('keep');
+        await second;
+      });
+      expect(screen.getByTestId('status-total-characters').textContent).toBe('Chars 15');
+      expect(screen.getByText(/dirty\.txt.*\*/)).toBeTruthy();
+    });
+  });
+
+  describe('Phase 2 — Search, Navigation & Text Manipulation', () => {
+    it('opens Go to Line modal when clicking status bar cursor position or via menu IPC and jumps to line', async () => {
+      let goToLineCb: (() => void) | null = null;
+      (window as any).electronAPI.onGoToLine = vi.fn((cb) => { goToLineCb = cb; });
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          {
+            id: 'tab-1',
+            title: 'lines.txt',
+            filePath: null,
+            content: 'l1\nl2\nl3\nl4\nl5',
+            isDirty: true,
+            eol: 'LF',
+          },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByTestId('status-cursor-position'));
+
+      // Click status bar Ln X, Col Y
+      fireEvent.click(screen.getByTestId('status-cursor-position'));
+      expect(screen.getByTestId('goto-line-modal')).toBeTruthy();
+
+      const input = screen.getByTestId('goto-line-input');
+      fireEvent.change(input, { target: { value: '4:2' } });
+      fireEvent.click(screen.getByTestId('goto-line-submit'));
+
+      expect(mockEditorInstance.setPosition).toHaveBeenCalledWith({ lineNumber: 4, column: 2 });
+      expect(mockEditorInstance.revealLineInCenter).toHaveBeenCalledWith(4);
+      expect(screen.getByTestId('status-cursor-position').textContent).toBe('Ln 4, Col 2');
+
+      // Also opens via menu:goToLine IPC
+      act(() => {
+        goToLineCb?.();
+      });
+      expect(screen.getByTestId('goto-line-modal')).toBeTruthy();
+    });
+
+    it('toggles Show Whitespace & EOL from toolbar button and menu IPC', async () => {
+      let toggleWsCb: (() => void) | null = null;
+      (window as any).electronAPI.onToggleWhitespace = vi.fn((cb) => { toggleWsCb = cb; });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByTestId('whitespace-toggle'));
+
+      const wsBtn = screen.getByTestId('whitespace-toggle');
+      expect(wsBtn.getAttribute('aria-pressed')).toBe('false');
+      expect(screen.queryByTestId('status-whitespace-indicator')).toBeNull();
+
+      fireEvent.click(wsBtn);
+      expect(wsBtn.getAttribute('aria-pressed')).toBe('true');
+      expect(screen.getByTestId('status-whitespace-indicator').textContent).toContain('WS+EOL (LF)');
+
+      act(() => {
+        toggleWsCb?.();
+      });
+      expect(wsBtn.getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('runs Line & Text Operations via menu:textOperation IPC', async () => {
+      let textOpCb: ((op: string) => void) | null = null;
+      (window as any).electronAPI.onTextOperation = vi.fn((cb) => { textOpCb = cb; });
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          {
+            id: 'tab-1',
+            title: 'ops.txt',
+            filePath: '/tmp/ops.txt',
+            content: 'c  \na\nb\na',
+            isDirty: false,
+            eol: 'LF',
+          },
+        ],
+      });
+      (window as any).electronAPI.readFile = vi.fn().mockResolvedValue({
+        filePath: '/tmp/ops.txt',
+        content: 'c  \na\nb\na',
+        eol: 'LF',
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('ops.txt'));
+
+      act(() => {
+        textOpCb?.('trimTrailingWhitespace');
+      });
+      await waitFor(() => expect(screen.getByTestId('status-total-characters').textContent).toBe('Chars 7'));
+
+      act(() => {
+        textOpCb?.('removeDuplicateLines');
+      });
+      await waitFor(() => expect(screen.getByTestId('status-total-characters').textContent).toBe('Chars 5'));
+    });
+
+    it('searches and replaces across all open tabs using FindInTabsPanel', async () => {
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'first.txt',  filePath: null, content: 'apple pie',  isDirty: true, eol: 'LF' },
+          { id: 'tab-2', title: 'second.txt', filePath: null, content: 'apple tart', isDirty: true, eol: 'LF' },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/first\.txt/));
+
+      // Open panel via toolbar button
+      fireEvent.click(screen.getByTestId('find-in-tabs-toggle'));
+      expect(screen.getByTestId('find-in-tabs-panel')).toBeTruthy();
+
+      fireEvent.change(screen.getByTestId('find-in-tabs-query'), { target: { value: 'apple' } });
+      await waitFor(() =>
+        expect(screen.getByTestId('find-in-tabs-summary').textContent).toContain('2 matches in 2 tabs'),
+      );
+
+      // Click match in second.txt to switch active tab and jump to match
+      fireEvent.click(screen.getByTestId('find-in-tabs-match-tab-2-0'));
+      await waitFor(() => expect(screen.getByTestId('status-total-characters').textContent).toBe('Chars 10'));
+
+      // Replace all across tabs
+      fireEvent.change(screen.getByTestId('find-in-tabs-replace'), { target: { value: 'pear' } });
+      fireEvent.click(screen.getByTestId('find-in-tabs-replace-all-btn'));
+
+      await waitFor(() => expect(screen.getByTestId('status-total-characters').textContent).toBe('Chars 9'));
+    });
+  });
+
+  describe('Phase 3: View & Encoding', () => {
+    it('toggles Always on Top from the toolbar button and responds to menu IPC updates', async () => {
+      let alwaysOnTopChangedCb: ((flag: boolean) => void) | undefined;
+      (window as any).electronAPI.onAlwaysOnTopChanged = vi.fn((cb: (flag: boolean) => void) => {
+        alwaysOnTopChangedCb = cb;
+      });
+      (window as any).electronAPI.toggleAlwaysOnTop = vi.fn()
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false);
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByTestId('always-on-top-toggle'));
+
+      const pinBtn = screen.getByTestId('always-on-top-toggle');
+      expect(pinBtn.getAttribute('aria-pressed')).toBe('false');
+      expect(screen.queryByTestId('status-always-on-top')).toBeNull();
+
+      // Click toolbar pin button -> enables Always on Top
+      fireEvent.click(pinBtn);
+      await waitFor(() => expect(pinBtn.getAttribute('aria-pressed')).toBe('true'));
+      expect((window as any).electronAPI.toggleAlwaysOnTop).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('status-always-on-top').textContent).toContain('Pinned');
+
+      // Menu event disables Always on Top
+      act(() => {
+        alwaysOnTopChangedCb?.(false);
+      });
+      await waitFor(() => expect(pinBtn.getAttribute('aria-pressed')).toBe('false'));
+      expect(screen.queryByTestId('status-always-on-top')).toBeNull();
+    });
+
+    it('toggles Side-by-Side Split View and Diff View across two open tabs', async () => {
+      let toggleSplitCb: (() => void) | undefined;
+      let toggleDiffCb: (() => void) | undefined;
+      (window as any).electronAPI.onToggleSplitView = vi.fn((cb: () => void) => {
+        toggleSplitCb = cb;
+      });
+      (window as any).electronAPI.onToggleDiffView = vi.fn((cb: () => void) => {
+        toggleDiffCb = cb;
+      });
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'left.ts',  filePath: null, content: 'const a = 1;', isDirty: true, eol: 'LF' },
+          { id: 'tab-2', title: 'right.ts', filePath: null, content: 'const a = 2;', isDirty: true, eol: 'LF' },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/left\.ts/));
+
+      // Enter Split View via toolbar toggle
+      fireEvent.click(screen.getByTestId('split-view-toggle'));
+      expect(screen.getByTestId('split-diff-toolbar')).toBeTruthy();
+      expect(screen.getByTestId('split-view-container')).toBeTruthy();
+      expect(screen.getByTestId('split-left-pane')).toBeTruthy();
+      expect(screen.getByTestId('split-right-pane')).toBeTruthy();
+      expect((screen.getByTestId('secondary-tab-select') as HTMLSelectElement).value).toBe('tab-2');
+
+      // Swap left and right tabs
+      fireEvent.click(screen.getByTestId('swap-split-tabs-button'));
+      expect(screen.getByTestId('split-primary-tab-label').textContent).toBe('right.ts');
+      expect((screen.getByTestId('secondary-tab-select') as HTMLSelectElement).value).toBe('tab-1');
+
+      // Switch to Diff View via Diff mode button
+      fireEvent.click(screen.getByTestId('diff-mode-button'));
+      expect(screen.getByTestId('diff-view-container')).toBeTruthy();
+      expect(screen.getByTestId('mock-monaco-diff-editor')).toBeTruthy();
+      expect(capturedDiffProps?.original).toBe('const a = 2;');
+      expect(capturedDiffProps?.modified).toBe('const a = 1;');
+
+      // Toggle Diff View off via menu IPC callback
+      act(() => {
+        toggleDiffCb?.();
+      });
+      expect(screen.queryByTestId('diff-view-container')).toBeNull();
+      expect(screen.queryByTestId('split-diff-toolbar')).toBeNull();
+
+      // Re-open Split View via menu IPC and close via Close button
+      act(() => {
+        toggleSplitCb?.();
+      });
+      expect(screen.getByTestId('split-view-container')).toBeTruthy();
+      fireEvent.click(screen.getByTestId('close-split-diff-button'));
+      expect(screen.queryByTestId('split-view-container')).toBeNull();
+    });
+
+    it('opens Split View and Diff View from the tab context menu', async () => {
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'one.txt', filePath: null, content: 'one', isDirty: true, eol: 'LF' },
+          { id: 'tab-2', title: 'two.txt', filePath: null, content: 'two', isDirty: true, eol: 'LF' },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/two\.txt/));
+
+      // Right-click two.txt -> Open in Split View
+      fireEvent.contextMenu(screen.getByText(/two\.txt/));
+      fireEvent.click(screen.getByTestId('tab-context-split-view'));
+      expect(screen.getByTestId('split-view-container')).toBeTruthy();
+
+      // Right-click two.txt -> Compare with Active Tab
+      fireEvent.contextMenu(screen.getAllByText(/two\.txt/)[0]);
+      fireEvent.click(screen.getByTestId('tab-context-compare-active'));
+      expect(screen.getByTestId('diff-view-container')).toBeTruthy();
+    });
+
+    it('syncs edits from the Diff View modified side back to the compared tab (CR-01)', async () => {
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'one.txt', filePath: null, content: 'one', isDirty: true, eol: 'LF' },
+          { id: 'tab-2', title: 'two.txt', filePath: '/tmp/two.txt', content: 'two', isDirty: false, eol: 'LF' },
+        ],
+      });
+      (window as any).electronAPI.readFile = vi.fn().mockResolvedValue({
+        filePath: '/tmp/two.txt',
+        content: 'two',
+        eol: 'LF',
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/two\.txt/));
+
+      fireEvent.click(screen.getByTestId('diff-view-toggle'));
+      expect(screen.getByTestId('diff-readonly-hint')).toBeTruthy();
+      expect(capturedDiffProps?.options?.originalEditable).toBe(false);
+      expect(typeof capturedDiffProps?.onMount).toBe('function');
+
+      let contentListener: (() => void) | undefined;
+      let modifiedValue = 'two';
+      const dispose = vi.fn();
+      const mockDiffEditor = {
+        getModifiedEditor: () => ({
+          getValue: () => modifiedValue,
+          onDidChangeModelContent: (cb: () => void) => {
+            contentListener = cb;
+            return { dispose };
+          },
+        }),
+      };
+
+      act(() => {
+        capturedDiffProps.onMount(mockDiffEditor);
+      });
+      expect(contentListener).toBeDefined();
+
+      modifiedValue = 'two edited';
+      act(() => {
+        contentListener?.();
+      });
+
+      await waitFor(() => expect(capturedDiffProps?.modified).toBe('two edited'));
+      // The compared tab is now dirty; the primary tab is untouched.
+      expect(screen.getAllByText(/two\.txt \*/).length).toBeGreaterThan(0);
+      expect(capturedDiffProps?.original).toBe('one');
+
+      // Remounting disposes the previous listener.
+      act(() => {
+        capturedDiffProps.onMount(mockDiffEditor);
+      });
+      expect(dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the status bar cursor in sync with the split view left editor (CR-17)', async () => {
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'one.txt', filePath: null, content: 'a\nb\nc\nd', isDirty: true, eol: 'LF' },
+          { id: 'tab-2', title: 'two.txt', filePath: null, content: 'two', isDirty: true, eol: 'LF' },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/two\.txt/));
+
+      fireEvent.click(screen.getByTestId('split-view-toggle'));
+      expect(screen.getByTestId('split-left-pane')).toBeTruthy();
+      expect(cursorPositionListener).toBeDefined();
+      expect(cursorSelectionListener).toBeDefined();
+
+      setMockCursorPosition(3, 2);
+      act(() => {
+        emitCursorPositionChange();
+      });
+      expect(screen.getByTestId('status-cursor-position').textContent).toBe('Ln 3, Col 2');
+    });
+
+    it('points Find, Go to Line and the status bar at the diff view original editor (CR-17)', async () => {
+      let findCb: (() => void) | null = null;
+      let goToLineCb: (() => void) | null = null;
+      (window as any).electronAPI.onFind = vi.fn((cb: () => void) => { findCb = cb; });
+      (window as any).electronAPI.onGoToLine = vi.fn((cb: () => void) => { goToLineCb = cb; });
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'one.txt', filePath: null, content: 'a\nb\nc\nd', isDirty: true, eol: 'LF' },
+          { id: 'tab-2', title: 'two.txt', filePath: null, content: 'two', isDirty: true, eol: 'LF' },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/two\.txt/));
+      fireEvent.click(screen.getByTestId('diff-view-toggle'));
+      expect(screen.getByTestId('diff-view-container')).toBeTruthy();
+
+      let originalCursorListener: ((e: { position: { lineNumber: number; column: number } }) => void) | undefined;
+      const findRun = vi.fn();
+      const originalEditor = {
+        getAction: vi.fn(() => ({ run: findRun })),
+        getPosition: vi.fn(() => ({ lineNumber: 1, column: 1 })),
+        getSelection: vi.fn(() => null),
+        getModel: vi.fn(() => null),
+        setPosition: vi.fn(),
+        revealLineInCenter: vi.fn(),
+        focus: vi.fn(),
+        onDidChangeCursorPosition: vi.fn((cb: typeof originalCursorListener) => {
+          originalCursorListener = cb;
+          return { dispose: vi.fn() };
+        }),
+        onDidChangeCursorSelection: vi.fn(() => ({ dispose: vi.fn() })),
+      };
+      const mockDiffEditor = {
+        getOriginalEditor: () => originalEditor,
+        getModifiedEditor: () => ({
+          getValue: () => 'two',
+          onDidChangeModelContent: () => ({ dispose: vi.fn() }),
+        }),
+      };
+      act(() => {
+        capturedDiffProps.onMount(mockDiffEditor);
+      });
+
+      // Find targets the mounted diff editor, not the disposed single-view editor.
+      mockEditorInstance.getAction.mockClear();
+      act(() => {
+        findCb!();
+      });
+      expect(originalEditor.getAction).toHaveBeenCalledWith('actions.find');
+      expect(findRun).toHaveBeenCalled();
+      expect(mockEditorInstance.getAction).not.toHaveBeenCalled();
+
+      // Go to Line jumps in the original editor.
+      act(() => {
+        goToLineCb!();
+      });
+      fireEvent.change(screen.getByTestId('goto-line-input'), { target: { value: '3' } });
+      fireEvent.click(screen.getByTestId('goto-line-submit'));
+      expect(originalEditor.setPosition).toHaveBeenCalledWith({ lineNumber: 3, column: 1 });
+
+      // Cursor moves in the original editor update the status bar.
+      act(() => {
+        originalCursorListener!({ position: { lineNumber: 2, column: 5 } });
+      });
+      expect(screen.getByTestId('status-cursor-position').textContent).toBe('Ln 2, Col 5');
+    });
+
+    const latinSession = (overrides: Record<string, unknown> = {}) => ({
+      activeTabId: 'tab-1',
+      tabs: [
+        {
+          id: 'tab-1',
+          title: 'latin.txt',
+          filePath: '/tmp/latin.txt',
+          content: 'Price €100',
+          isDirty: false,
+          eol: 'LF',
+          encoding: 'utf-8-bom',
+          ...overrides,
+        },
+      ],
+    });
+
+    const chooseEncoding = async (action: 'reopen' | 'save', encoding: string) => {
+      fireEvent.click(screen.getByTestId('encoding-selector-button'));
+      fireEvent.click(screen.getByTestId(`encoding-action-${action}`));
+      // The handlers are async (dialogs, IPC); let them settle.
+      await act(async () => {
+        fireEvent.click(screen.getByTestId(`encoding-option-${encoding}`));
+      });
+    };
+
+    it('Save with Encoding does not touch the buffer until the save succeeds (CR-08)', async () => {
+      const api = (window as any).electronAPI;
+      api.loadSession.mockResolvedValue(latinSession({ content: 'Price 100' }));
+      api.readFile = vi.fn().mockResolvedValue({
+        filePath: '/tmp/latin.txt',
+        content: 'Price 100',
+        eol: 'LF',
+        encoding: 'utf-8-bom',
+      });
+      api.saveFileDialog = vi.fn().mockResolvedValue(null);
+      api.confirmLossyEncoding = vi.fn();
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => expect(screen.getByTestId('encoding-selector-button').textContent).toBe('UTF-8 with BOM'));
+
+      // Cancelled save: encoding unchanged.
+      await chooseEncoding('save', 'iso-8859-1');
+      expect(api.saveFileDialog).toHaveBeenCalledWith('/tmp/latin.txt', 'Price 100', 'LF', 'iso-8859-1');
+      expect(screen.getByTestId('encoding-selector-button').textContent).toBe('UTF-8 with BOM');
+      // Nothing to lose, so no warning.
+      expect(api.confirmLossyEncoding).not.toHaveBeenCalled();
+
+      // Successful save: encoding switches, tab stays clean.
+      api.saveFileDialog.mockResolvedValue('/tmp/latin.txt');
+      await chooseEncoding('save', 'iso-8859-1');
+      await waitFor(() => expect(screen.getByTestId('encoding-selector-button').textContent).toBe('ISO-8859-1'));
+      expect(screen.queryByText(/latin\.txt \*/)).toBeNull();
+    });
+
+    it('warns before saving characters the encoding cannot represent (CR-08)', async () => {
+      let saveFileCb: (() => Promise<void>) | undefined;
+      const api = (window as any).electronAPI;
+      api.onSaveFile = vi.fn((cb: () => Promise<void>) => {
+        saveFileCb = cb;
+      });
+      api.loadSession.mockResolvedValue(latinSession());
+      api.readFile = vi.fn().mockResolvedValue({
+        filePath: '/tmp/latin.txt',
+        content: 'Price €100',
+        eol: 'LF',
+        encoding: 'utf-8-bom',
+      });
+      api.saveFileDialog = vi.fn().mockResolvedValue('/tmp/latin.txt');
+      api.confirmLossyEncoding = vi.fn().mockResolvedValue(false);
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByTestId('encoding-selector-button'));
+
+      // User cancels the warning: nothing is written, buffer and encoding unchanged.
+      await chooseEncoding('save', 'iso-8859-1');
+      expect(api.confirmLossyEncoding).toHaveBeenCalledWith('latin.txt', 'ISO-8859-1', 1);
+      expect(api.saveFileDialog).not.toHaveBeenCalled();
+      expect(screen.getByTestId('encoding-selector-button').textContent).toBe('UTF-8 with BOM');
+      expect(screen.getByTestId('status-total-characters').textContent).toBe('Chars 10');
+
+      // User accepts: the file is saved and the buffer reflects what was written.
+      api.confirmLossyEncoding.mockResolvedValue(true);
+      await chooseEncoding('save', 'iso-8859-1');
+      expect(api.saveFileDialog).toHaveBeenCalledWith('/tmp/latin.txt', 'Price €100', 'LF', 'iso-8859-1');
+      await waitFor(() => expect(screen.getByTestId('encoding-selector-button').textContent).toBe('ISO-8859-1'));
+      expect(screen.queryByText(/latin\.txt \*/)).toBeNull();
+
+      // A later plain save of new unrepresentable text also warns.
+      api.confirmLossyEncoding.mockClear().mockResolvedValue(false);
+      api.saveFileDialog.mockClear();
+      act(() => {
+        capturedEditorOnChange?.('Price ?100 ✓');
+      });
+      await act(async () => {
+        await saveFileCb?.();
+      });
+      expect(api.confirmLossyEncoding).toHaveBeenCalledWith('latin.txt', 'ISO-8859-1', 1);
+      expect(api.saveFileDialog).not.toHaveBeenCalled();
+      expect(screen.getByText(/latin\.txt \*/)).toBeTruthy();
+    });
+
+    it('Reopen with Encoding re-reads the file with the chosen encoding (CR-08)', async () => {
+      const api = (window as any).electronAPI;
+      api.loadSession.mockResolvedValue(latinSession({ content: 'cafÃ©', encoding: 'iso-8859-1' }));
+      api.readFile = vi.fn().mockResolvedValue({
+        filePath: '/tmp/latin.txt',
+        content: 'cafÃ©',
+        eol: 'LF',
+        encoding: 'iso-8859-1',
+      });
+      api.saveFileDialog = vi.fn();
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => expect(screen.getByTestId('encoding-selector-button').textContent).toBe('ISO-8859-1'));
+
+      api.readFile.mockResolvedValue({ filePath: '/tmp/latin.txt', content: 'café', eol: 'LF', encoding: 'utf-8' });
+      await chooseEncoding('reopen', 'utf-8');
+
+      expect(api.readFile).toHaveBeenLastCalledWith('/tmp/latin.txt', { encoding: 'utf-8' });
+      await waitFor(() => expect(screen.getByTestId('encoding-selector-button').textContent).toBe('UTF-8'));
+      expect(screen.getByTestId('status-total-characters').textContent).toBe('Chars 4');
+      expect(screen.queryByText(/latin\.txt \*/)).toBeNull();
+      expect(api.saveFileDialog).not.toHaveBeenCalled();
+    });
+
+    it('Reopen with Encoding asks before discarding unsaved changes (CR-08)', async () => {
+      const api = (window as any).electronAPI;
+      api.loadSession.mockResolvedValue(latinSession({ content: 'my edits', isDirty: true, encoding: 'utf-8' }));
+      api.readFile = vi.fn().mockResolvedValue({ filePath: '/tmp/latin.txt', content: 'disk', eol: 'LF', encoding: 'utf-16le' });
+      api.confirmReopenWithEncoding = vi.fn().mockResolvedValue(false);
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByTestId('encoding-selector-button'));
+
+      await chooseEncoding('reopen', 'utf-16le');
+      expect(api.confirmReopenWithEncoding).toHaveBeenCalledWith('latin.txt', 'UTF-16 LE');
+      expect(api.readFile).not.toHaveBeenCalled();
+      expect(screen.getByTestId('encoding-selector-button').textContent).toBe('UTF-8');
+
+      api.confirmReopenWithEncoding.mockResolvedValue(true);
+      await chooseEncoding('reopen', 'utf-16le');
+      expect(api.readFile).toHaveBeenCalledWith('/tmp/latin.txt', { encoding: 'utf-16le' });
+      await waitFor(() => expect(screen.getByTestId('encoding-selector-button').textContent).toBe('UTF-16 LE'));
+      expect(screen.queryByText(/latin\.txt \*/)).toBeNull();
+    });
+
+    it('applies the encoding reported with an external change and re-syncs the watcher (CR-09)', async () => {
+      let extChangeCb: ((data: unknown) => Promise<void>) | null = null;
+      const api = (window as any).electronAPI;
+      api.onExternalFileChange = vi.fn((cb) => { extChangeCb = cb; });
+      api.loadSession.mockResolvedValue(latinSession({ content: 'same', encoding: 'utf-8' }));
+      api.readFile = vi.fn().mockResolvedValue({ filePath: '/tmp/latin.txt', content: 'same', eol: 'LF', encoding: 'utf-8' });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => expect(screen.getByTestId('encoding-selector-button').textContent).toBe('UTF-8'));
+      await waitFor(() => expect(extChangeCb).not.toBeNull());
+      expect(api.syncWatchedFiles).toHaveBeenLastCalledWith([{ filePath: '/tmp/latin.txt', encoding: 'utf-8' }]);
+
+      // Same text, but the file was re-saved as UTF-16 LE by another program.
+      await act(async () => {
+        await extChangeCb!({ filePath: '/tmp/latin.txt', content: 'same', eol: 'LF', encoding: 'utf-16le' });
+      });
+      await waitFor(() => expect(screen.getByTestId('encoding-selector-button').textContent).toBe('UTF-16 LE'));
+      expect(api.confirmReloadExternalChange).not.toHaveBeenCalled();
+      expect(screen.queryByText(/latin\.txt \*/)).toBeNull();
+      await waitFor(() =>
+        expect(api.syncWatchedFiles).toHaveBeenLastCalledWith([{ filePath: '/tmp/latin.txt', encoding: 'utf-16le' }]),
+      );
+    });
+  });
+
+  describe('close active tab from the menu in split view (CR-10)', () => {
+    it('reassigns the secondary pane when Cmd/Ctrl+W closes it', async () => {
+      let closeTabCb: (() => void) | undefined;
+      let reopenCb: (() => void) | undefined;
+      const api = (window as any).electronAPI;
+      api.onCloseTab = vi.fn((cb: () => void) => { closeTabCb = cb; });
+      api.onReopenClosedTab = vi.fn((cb: () => void) => { reopenCb = cb; });
+      api.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'one.txt', filePath: null, content: 'one', isDirty: false, eol: 'LF' },
+          { id: 'tab-2', title: 'two.txt', filePath: null, content: 'two', isDirty: false, eol: 'LF' },
+          { id: 'tab-3', title: 'three.txt', filePath: null, content: 'three', isDirty: false, eol: 'LF' },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/three\.txt/));
+
+      fireEvent.click(screen.getByTestId('split-view-toggle'));
+      const select = () => screen.getByTestId('secondary-tab-select') as HTMLSelectElement;
+      fireEvent.change(select(), { target: { value: 'tab-3' } });
+      expect(select().value).toBe('tab-3');
+
+      // Activate the secondary tab, then close it with the menu shortcut.
+      const tabThree = screen.getAllByText(/three\.txt/)
+        .map(el => el.closest('div[draggable]'))
+        .find(Boolean) as HTMLElement;
+      fireEvent.click(tabThree);
+      await act(async () => {
+        closeTabCb?.();
+      });
+      await waitFor(() => expect(screen.queryAllByText(/three\.txt/).length).toBe(0));
+      expect(select().value).toBe('tab-1');
+
+      // Reopening the closed tab must not pull it back into the secondary pane.
+      await act(async () => {
+        reopenCb?.();
+      });
+      await waitFor(() => expect(screen.getAllByText(/three\.txt/).length).toBeGreaterThan(0));
+      expect(select().value).toBe('tab-1');
     });
   });
 });

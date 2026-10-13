@@ -1,15 +1,20 @@
 import { app } from 'electron';
 import { join } from 'path';
 import * as fs from 'fs';
+import type { EncodingKind } from '../shared/encodings';
 
 /** Line-ending kinds supported by the editor. */
 type EolKind = 'LF' | 'CRLF';
+
+export const MAX_RECENT_FILES = 10;
 
 export interface AppSettings {
   /** Custom directory where session folder is stored. null = use userData default. */
   sessionDir: string | null;
   /** Last selected theme ('dark' | 'light'). null/undefined = default dark. */
   theme?: string | null;
+  /** Most recently opened/saved file paths (newest first). */
+  recentFiles?: string[];
 }
 
 /** Lazily compute settings file path (not at module load time) */
@@ -29,9 +34,49 @@ export function loadAppSettings(): AppSettings {
   return { sessionDir: null };
 }
 
-export function saveAppSettings(settings: AppSettings): void {
+export function saveAppSettings(settings: Partial<AppSettings>): void {
+  const current = loadAppSettings();
+  const merged: AppSettings = {
+    ...current,
+    ...settings,
+    sessionDir: settings.sessionDir !== undefined ? settings.sessionDir : current.sessionDir,
+  };
   const settingsFile = getSettingsFilePath();
-  fs.writeFileSync(settingsFile, JSON.stringify(settings), 'utf-8');
+  const dir = join(app.getPath('userData'));
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(settingsFile, JSON.stringify(merged), 'utf-8');
+}
+
+/** Return the list of recently opened/saved file paths (newest first). */
+export function getRecentFiles(): string[] {
+  const list = loadAppSettings().recentFiles;
+  return Array.isArray(list) ? list : [];
+}
+
+/**
+ * Add a file path to the top of the recent files list, deduplicating any
+ * existing entry and capping at `MAX_RECENT_FILES`.
+ */
+export function addRecentFile(filePath: string): string[] {
+  if (!filePath || typeof filePath !== 'string') return getRecentFiles();
+  const existing = getRecentFiles().filter(p => p !== filePath);
+  const updated = [filePath, ...existing].slice(0, MAX_RECENT_FILES);
+  saveAppSettings({ recentFiles: updated });
+  return updated;
+}
+
+/** Clear all recently opened/saved file paths. */
+export function clearRecentFiles(): void {
+  saveAppSettings({ recentFiles: [] });
+}
+
+/** Remove a single file path from the recent files list. */
+export function removeRecentFile(filePath: string): string[] {
+  const updated = getRecentFiles().filter(p => p !== filePath);
+  saveAppSettings({ recentFiles: updated });
+  return updated;
 }
 
 /**
@@ -109,6 +154,7 @@ export function migrateOldSessionFormat(): void {
         isDirty: tab.isDirty ?? false,
         language: tab.language,
         eol: tab.eol,
+        encoding: tab.encoding as EncodingKind | undefined,
         themeOverride: tab.themeOverride,
       })),
     };
@@ -166,6 +212,7 @@ export function saveSession(sessionData: any): boolean {
         isDirty: tab.isDirty ?? false,
         language: tab.language,
         eol: tab.eol,
+        encoding: tab.encoding as EncodingKind | undefined,
         themeOverride: tab.themeOverride,
       })),
     };
@@ -208,6 +255,7 @@ export function loadSession(): any {
         isDirty: tab.isDirty ?? false,
         language: tab.language,
         eol: tab.eol,
+        encoding: tab.encoding,
         themeOverride: tab.themeOverride,
       };
     });

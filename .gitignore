@@ -27,7 +27,6 @@ coverage/
 # IDEs and Editors
 .vscode/*
 !.vscode/extensions.json
-!.vscode/settings.json
 !.vscode/launch.json
 !.vscode/tasks.json
 .idea/

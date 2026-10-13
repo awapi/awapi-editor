@@ -13,6 +13,8 @@ AwapiEditor is a fast, lightweight, universal text editor built specifically for
 - **Lightning Fast Build Tools:** Powered by Vite (`vite-plugin-electron`, `vite-plugin-electron-renderer`) for an unmatched developer experience and fast Hot Module Replacement (HMR).
 - **Secure architecture:** Strict separation between the Main, Preload, and Renderer processes.
 
+👉 See the full [Features & Roadmap](docs/features.md) for a complete list of current capabilities and planned enhancements.
+
 ## � Installation
 
 ### macOS

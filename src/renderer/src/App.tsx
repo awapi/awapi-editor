@@ -1,16 +1,31 @@
 import React, { useState, useEffect } from 'react';
-import Editor from '@monaco-editor/react';
+import Editor, * as MonacoReact from '@monaco-editor/react';
 import { X } from 'lucide-react';
 import { useTheme } from './theme/ThemeContext';
 import { useSessionPersistence, loadSession, SessionTab } from './useSessionPersistence';
 import LanguageSelector from './LanguageSelector';
 import LineEndingSelector from './LineEndingSelector';
+import EncodingSelector from './EncodingSelector';
 import SettingsModal from './SettingsModal';
+import ShortcutsModal from './ShortcutsModal';
+import GoToLineModal from './GoToLineModal';
+import FindInTabsPanel, { type TabSearchMatch } from './FindInTabsPanel';
+import { applyTextOperation, type TextOperationKind } from './textOperations';
 import type { EolKind } from './lineEndings';
+import {
+  type EncodingKind,
+  DEFAULT_ENCODING,
+  ENCODING_LABEL,
+  countUnrepresentableCharacters,
+  toEncodableContent,
+} from '../../shared/encodings';
 import { inferLanguageFromFilename } from './languages';
 
 /** True when this window was opened via "Pop out to new window" (single-file view). */
 const isPopoutMode = typeof window !== 'undefined' && window.location.hash === '#popout';
+
+type EditorViewMode = 'single' | 'split' | 'diff';
+const DiffEditorComponent: React.ComponentType<any> | undefined = (MonacoReact as any).DiffEditor;
 
 interface Tab {
   id: string;
@@ -28,6 +43,8 @@ interface Tab {
   language?: string;
   /** Line-ending sequence used when saving the tab's content. Defaults to LF. */
   eol?: EolKind;
+  /** Character encoding used when saving the tab's content. Defaults to utf-8. */
+  encoding?: EncodingKind;
   /** Per-tab editor theme override. When undefined, the global theme is used.
    *  Only affects the Monaco editor surface, not the surrounding chrome. */
   themeOverride?: 'light' | 'dark';
@@ -37,14 +54,34 @@ const App: React.FC = () => {
   const { currentTheme, colors, importThemeFromMain } = useTheme();
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [secondaryTabId, setSecondaryTabId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<EditorViewMode>('single');
+  const [alwaysOnTop, setAlwaysOnTop] = useState<boolean>(false);
   const [wordWrap, setWordWrap] = useState<boolean>(true);
+  const [showWhitespace, setShowWhitespace] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [isGoToLineOpen, setIsGoToLineOpen] = useState(false);
+  const [isFindInTabsOpen, setIsFindInTabsOpen] = useState(false);
   const [tabContextMenu, setTabContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
+  const [closedTabs, setClosedTabs] = useState<Tab[]>([]);
   const [renameTarget, setRenameTarget] = useState<{ tabId: string; currentName: string } | null>(null);
   const [renameInput, setRenameInput] = useState('');
   const [renameError, setRenameError] = useState<string | null>(null);
   const editorRef = React.useRef<any>(null);
   const editorDisposablesRef = React.useRef<Array<{ dispose: () => void }>>([]);
+  const pendingJumpRef = React.useRef<{ lineNumber: number; column: number; matchLength?: number } | null>(null);
+  const diffEditorDisposableRef = React.useRef<{ dispose: () => void } | null>(null);
+  const diffModifiedTabIdRef = React.useRef<string | null>(null);
+  const popoutCloseInFlightRef = React.useRef(false);
+  /**
+   * File paths with an open "changed on disk" prompt, mapped to the latest disk
+   * content reported while it is open. Further change events only update the
+   * entry, so one prompt is shown and the user's choice applies to the newest content.
+   */
+  const reloadPromptsInFlightRef = React.useRef(
+    new Map<string, { filePath: string; content: string; eol: EolKind; encoding?: EncodingKind }>()
+  );
   const [cursorPosition, setCursorPosition] = useState<{ line: number; column: number }>({ line: 1, column: 1 });
   const [selectionSummary, setSelectionSummary] = useState<{ lines: number; chars: number }>({ lines: 0, chars: 0 });
 
@@ -82,16 +119,66 @@ const App: React.FC = () => {
       content: '',
       isDirty: false,
       savedContent: '',
-      eol: 'LF'
+      eol: 'LF',
+      encoding: DEFAULT_ENCODING,
     };
     setTabs(prev => [...prev, newTab]);
     setActiveTabId(id);
   };
 
+  /**
+   * Warns before saving content that the tab's encoding can't represent
+   * (those characters would be written as `?`). Resolves true to proceed.
+   */
+  const confirmLossySave = async (w: any, tab: Tab): Promise<boolean> => {
+    const encoding = tab.encoding ?? DEFAULT_ENCODING;
+    const count = countUnrepresentableCharacters(tab.content, encoding);
+    if (count === 0) return true;
+    const label = ENCODING_LABEL[encoding];
+    if (w.electronAPI?.confirmLossyEncoding) {
+      return w.electronAPI.confirmLossyEncoding(tab.title, label, count);
+    }
+    return typeof window.confirm === 'function'
+      ? window.confirm(`${count} character(s) in "${tab.title}" cannot be represented in ${label} and will be saved as "?". Save anyway?`)
+      : false;
+  };
+
+  /** Saves `tab` (in its encoding/EOL). Resolves to the saved path, or null if cancelled. */
+  const invokeSaveFileDialog = async (
+    w: any,
+    tab: Tab,
+    filePathOverride: string | null = tab.filePath,
+  ): Promise<string | null> => {
+    if (!(await confirmLossySave(w, tab))) return null;
+    const eol = tab.eol ?? 'LF';
+    if (tab.encoding && tab.encoding !== DEFAULT_ENCODING) {
+      return w.electronAPI.saveFileDialog(filePathOverride, tab.content, eol, tab.encoding);
+    }
+    return w.electronAPI.saveFileDialog(filePathOverride, tab.content, eol);
+  };
+
+  /** The tab's content as it reads back from disk after saving it in its encoding. */
+  const contentAsSaved = (tab: Tab): string =>
+    toEncodableContent(tab.content, tab.encoding ?? DEFAULT_ENCODING);
+
+  /**
+   * After a lossy save the buffer is replaced with what was written; otherwise
+   * the current buffer is kept (it may contain edits made during the save dialog).
+   */
+  const savedContentPatch = (tab: Tab, savedContent: string): Partial<Tab> =>
+    savedContent !== tab.content ? { content: savedContent } : {};
+
   const tabsRef = React.useRef(tabs);
   const activeTabIdRef = React.useRef(activeTabId);
+  // Read by closeTabsByIds, which also runs from IPC listeners registered once on mount.
+  const secondaryTabIdRef = React.useRef(secondaryTabId);
+  const closedTabsRef = React.useRef<Tab[]>(closedTabs);
   // Prevents the async init from running twice in React StrictMode
   const initDoneRef = React.useRef(false);
+
+  tabsRef.current = tabs;
+  activeTabIdRef.current = activeTabId;
+  secondaryTabIdRef.current = secondaryTabId;
 
   useEffect(() => {
     tabsRef.current = tabs;
@@ -113,6 +200,27 @@ const App: React.FC = () => {
 
   // Auto-save session whenever tabs or active tab changes (disabled in popout windows)
   useSessionPersistence(tabs, activeTabId, !isPopoutMode);
+
+  // Open files and their encodings, serialized so the watch-sync effect only
+  // re-runs when a path or encoding actually changes (not on every keystroke).
+  const watchedFilesKey = JSON.stringify(
+    tabs
+      .filter(t => !!t.filePath)
+      .map(t => ({ filePath: t.filePath as string, encoding: t.encoding ?? DEFAULT_ENCODING })),
+  );
+
+  // Runs in pop-outs too: main routes external changes to every window that has the file open.
+  useEffect(() => {
+    const w = window as any;
+    w.electronAPI?.syncWatchedFiles?.(JSON.parse(watchedFilesKey));
+  }, [watchedFilesKey]);
+
+  // Pop-outs report unsaved changes so main can guard closing the window.
+  const popoutIsDirty = isPopoutMode && tabs.some(t => t.isDirty);
+  useEffect(() => {
+    if (!isPopoutMode) return;
+    (window as any).electronAPI?.setWindowDirty?.(popoutIsDirty);
+  }, [popoutIsDirty]);
 
   useEffect(() => {
     // Session restore is a one-shot operation: guard it so React StrictMode's
@@ -151,12 +259,24 @@ const App: React.FC = () => {
                   if (saved.filePath && !saved.isDirty) {
                     try {
                       const fileData = await w.electronAPI.readFile(saved.filePath);
-                      if (fileData) return { ...saved, content: fileData.content, eol: fileData.eol, savedContent: fileData.content };
+                      if (fileData) {
+                        return {
+                          ...saved,
+                          content: fileData.content,
+                          eol: fileData.eol,
+                          encoding: fileData.encoding ?? saved.encoding ?? DEFAULT_ENCODING,
+                          savedContent: fileData.content,
+                        };
+                      }
                     } catch {
                       // File no longer exists – fall through and use stored content
                     }
                   }
-                  return { ...saved, eol: saved.eol ?? 'LF' };
+                  return {
+                    ...saved,
+                    eol: saved.eol ?? 'LF',
+                    encoding: saved.encoding ?? DEFAULT_ENCODING,
+                  };
                 })
               );
               setTabs(restoredTabs);
@@ -187,28 +307,44 @@ const App: React.FC = () => {
 
       w.electronAPI.onOpenFile(async () => {
         try {
-          const result = await w.electronAPI.openFileDialog();
-          if (result) {
-            const fileName = result.filePath.split(/[\\/]/).pop() || result.filePath;
-            
-            // Check if file already open
-            const existingTab = tabsRef.current.find((t: Tab) => t.filePath === result.filePath);
-            if(existingTab) {
-              setActiveTabId(existingTab.id);
+          const openedFiles: Array<{ filePath: string; content: string; eol: EolKind; encoding?: EncodingKind }> | null =
+            await w.electronAPI.openFileDialog();
+          if (!Array.isArray(openedFiles) || openedFiles.length === 0) return;
+
+          const newTabsToAdd: Tab[] = [];
+          let lastTargetId: string | null = null;
+          const now = Date.now();
+
+          openedFiles.forEach((item, idx) => {
+            if (!item?.filePath) return;
+            const existingTab =
+              tabsRef.current.find((t: Tab) => t.filePath === item.filePath) ??
+              newTabsToAdd.find((t: Tab) => t.filePath === item.filePath);
+            if (existingTab) {
+              lastTargetId = existingTab.id;
               return;
             }
 
-            const id = Date.now().toString();
-            setTabs(prev => [...prev, {
+            const fileName = item.filePath.split(/[\\/]/).pop() || item.filePath;
+            const id = openedFiles.length === 1 ? `${now}` : `tab-${now}-${idx}`;
+            newTabsToAdd.push({
               id,
               title: fileName,
-              filePath: result.filePath,
-              content: result.content,
+              filePath: item.filePath,
+              content: item.content,
               isDirty: false,
-              savedContent: result.content,
-              eol: result.eol
-            }]);
-            setActiveTabId(id);
+              savedContent: item.content,
+              eol: item.eol ?? 'LF',
+              encoding: item.encoding ?? DEFAULT_ENCODING,
+            });
+            lastTargetId = id;
+          });
+
+          if (newTabsToAdd.length > 0) {
+            setTabs(prev => [...prev, ...newTabsToAdd]);
+          }
+          if (lastTargetId) {
+            setActiveTabId(lastTargetId);
           }
         } catch(e) { console.error('Error opening file', e); }
       });
@@ -220,17 +356,13 @@ const App: React.FC = () => {
         if(!currentTab) return;
 
         try {
-          const savedPath = await w.electronAPI.saveFileDialog(
-            currentTab.filePath,
-            currentTab.content,
-            currentTab.eol ?? 'LF'
-          );
+          const savedPath = await invokeSaveFileDialog(w, currentTab, currentTab.filePath);
           if (savedPath) {
             const fileName = savedPath.split(/[\\/]/).pop() || savedPath;
-            const savedContent = currentTab.content;
+            const savedContent = contentAsSaved(currentTab);
             setTabs(prev => prev.map(t => 
               t.id === active 
-                ? { ...t, filePath: savedPath, title: fileName, isDirty: false, savedContent }
+                ? { ...t, ...savedContentPatch(currentTab, savedContent), filePath: savedPath, title: fileName, isDirty: false, savedContent }
                 : t
             ));
           }
@@ -244,21 +376,120 @@ const App: React.FC = () => {
         if(!currentTab) return;
 
         try {
-          const savedPath = await w.electronAPI.saveFileDialog(
-            null,
-            currentTab.content,
-            currentTab.eol ?? 'LF'
-          );
+          const savedPath = await invokeSaveFileDialog(w, currentTab, null);
           if (savedPath) {
             const fileName = savedPath.split(/[\\/]/).pop() || savedPath;
-            const savedContent = currentTab.content;
+            const savedContent = contentAsSaved(currentTab);
             setTabs(prev => prev.map(t => 
               t.id === active 
-                ? { ...t, filePath: savedPath, title: fileName, isDirty: false, savedContent }
+                ? { ...t, ...savedContentPatch(currentTab, savedContent), filePath: savedPath, title: fileName, isDirty: false, savedContent }
                 : t
             ));
           }
         } catch(e) { console.error('Error saving file', e); }
+      });
+
+      w.electronAPI.onSaveAllFiles?.(async () => {
+        const dirtyTabs = tabsRef.current.filter((t: Tab) => t.isDirty);
+        for (const tab of dirtyTabs) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            const savedPath = await invokeSaveFileDialog(w, tab, tab.filePath);
+            if (savedPath) {
+              const fileName = savedPath.split(/[\\/]/).pop() || savedPath;
+              const savedContent = contentAsSaved(tab);
+              setTabs(prev => prev.map(t =>
+                t.id === tab.id
+                  ? { ...t, ...savedContentPatch(tab, savedContent), filePath: savedPath, title: fileName, isDirty: false, savedContent }
+                  : t
+              ));
+            }
+          } catch (e) {
+            console.error('Error saving file during Save All', e);
+          }
+        }
+      });
+
+      w.electronAPI.onExternalFileChange?.(async (data: {
+        filePath: string;
+        content: string;
+        eol: EolKind;
+        encoding?: EncodingKind;
+      }) => {
+        const target = tabsRef.current.find((t: Tab) => t.filePath === data.filePath);
+        if (!target) return;
+        const nextEol = data.eol ?? target.eol ?? 'LF';
+        const nextEncoding = data.encoding ?? target.encoding ?? DEFAULT_ENCODING;
+        if (
+          target.content === data.content &&
+          (target.eol ?? 'LF') === nextEol &&
+          (target.encoding ?? DEFAULT_ENCODING) === nextEncoding &&
+          !target.isDirty
+        ) {
+          return;
+        }
+        const reloadedFrom = (latest: typeof data) => ({
+          content: latest.content,
+          savedContent: latest.content,
+          eol: latest.eol ?? target.eol ?? 'LF',
+          encoding: latest.encoding ?? target.encoding ?? DEFAULT_ENCODING,
+          isDirty: false,
+        });
+        if (!target.isDirty) {
+          setTabs(prev => prev.map(t => (t.id === target.id ? { ...t, ...reloadedFrom(data) } : t)));
+          return;
+        }
+
+        const promptsInFlight = reloadPromptsInFlightRef.current;
+        if (promptsInFlight.has(data.filePath)) {
+          promptsInFlight.set(data.filePath, data);
+          return;
+        }
+        promptsInFlight.set(data.filePath, data);
+
+        let decision: 'reload' | 'keep' = 'keep';
+        try {
+          if (w.electronAPI?.confirmReloadExternalChange) {
+            decision = await w.electronAPI.confirmReloadExternalChange(target.title);
+          } else if (typeof window.confirm === 'function') {
+            decision = window.confirm(`"${target.title}" changed on disk. Reload and discard your edits?`)
+              ? 'reload'
+              : 'keep';
+          }
+        } catch (e) {
+          console.error('Failed to confirm reload of externally changed file', e);
+        }
+        const latest = promptsInFlight.get(data.filePath) ?? data;
+        promptsInFlight.delete(data.filePath);
+
+        if (decision === 'reload') {
+          setTabs(prev => prev.map(t => (t.id === target.id ? { ...t, ...reloadedFrom(latest) } : t)));
+        } else {
+          setTabs(prev => prev.map(t =>
+            t.id === target.id
+              ? { ...t, savedContent: latest.content, isDirty: t.content !== latest.content }
+              : t
+          ));
+        }
+      });
+
+      w.electronAPI.onExternalFileDelete?.((data: { filePath: string }) => {
+        setTabs(prev => prev.map(t =>
+          t.filePath === data.filePath
+            ? { ...t, isDirty: true, savedContent: undefined }
+            : t
+        ));
+      });
+
+      w.electronAPI.onCloseTab?.(() => {
+        const active = activeTabIdRef.current;
+        if (active) {
+          closeTabsByIds([active]);
+        }
+      });
+
+      w.electronAPI.onReopenClosedTab?.(() => {
+        reopenClosedTab();
       });
 
       w.electronAPI.onFind(() => {
@@ -271,6 +502,73 @@ const App: React.FC = () => {
         if (editorRef.current) {
           editorRef.current.getAction('editor.action.startFindReplaceAction').run();
         }
+      });
+
+      w.electronAPI.onFindInTabs?.(() => {
+        if (!isPopoutMode) {
+          setIsFindInTabsOpen(true);
+        }
+      });
+
+      w.electronAPI.onGoToLine?.(() => {
+        if (activeTabIdRef.current) {
+          setIsGoToLineOpen(true);
+        }
+      });
+
+      w.electronAPI.onToggleWhitespace?.(() => {
+        setShowWhitespace(prev => !prev);
+      });
+
+      w.electronAPI.onToggleSplitView?.(() => {
+        if (!isPopoutMode) {
+          setViewMode(prev => (prev === 'split' ? 'single' : 'split'));
+        }
+      });
+
+      w.electronAPI.onToggleDiffView?.(() => {
+        if (!isPopoutMode) {
+          setViewMode(prev => (prev === 'diff' ? 'single' : 'diff'));
+        }
+      });
+
+      w.electronAPI.onAlwaysOnTopChanged?.((flag: boolean) => {
+        setAlwaysOnTop(Boolean(flag));
+      });
+
+      if (w.electronAPI.getAlwaysOnTop) {
+        Promise.resolve(w.electronAPI.getAlwaysOnTop())
+          .then((flag: boolean) => setAlwaysOnTop(Boolean(flag)))
+          .catch(() => {});
+      }
+
+      w.electronAPI.onTextOperation?.((operation: string) => {
+        const activeId = activeTabIdRef.current;
+        if (!activeId) return;
+        const currentTab = tabsRef.current.find((t: Tab) => t.id === activeId);
+        if (!currentTab) return;
+
+        const selection = editorRef.current?.getSelection?.();
+        const nextContent = applyTextOperation(
+          currentTab.content,
+          operation as TextOperationKind,
+          selection && typeof selection.isEmpty === 'function' && !selection.isEmpty()
+            ? {
+                startLineNumber: selection.startLineNumber,
+                startColumn: selection.startColumn,
+                endLineNumber: selection.endLineNumber,
+                endColumn: selection.endColumn,
+              }
+            : null,
+        );
+        if (nextContent === currentTab.content) return;
+        setTabs(prev =>
+          prev.map(t => {
+            if (t.id !== activeId) return t;
+            const isDirty = t.savedContent === undefined ? true : nextContent !== t.savedContent;
+            return { ...t, content: nextContent, isDirty };
+          }),
+        );
       });
 
       w.electronAPI.onFormat(() => {
@@ -294,6 +592,10 @@ const App: React.FC = () => {
         setIsSettingsOpen(true);
       });
 
+      w.electronAPI.onOpenShortcuts?.(() => {
+        setIsShortcutsOpen(true);
+      });
+
       w.electronAPI.onShowAllCommands(() => {
         if (editorRef.current) {
           editorRef.current.trigger('keyboard', 'editor.action.quickCommand', {});
@@ -306,6 +608,21 @@ const App: React.FC = () => {
       });
 
       if (isPopoutMode) {
+        // Main intercepted a close of this (dirty) pop-out window: run the same
+        // Save / Don't Save / Cancel flow used when closing a tab.
+        w.electronAPI.onWindowCloseRequested?.(async () => {
+          if (popoutCloseInFlightRef.current) return;
+          popoutCloseInFlightRef.current = true;
+          try {
+            const tab = tabsRef.current[0];
+            const { proceed } = tab ? await confirmCloseTab(tab) : { proceed: true };
+            if (proceed) await w.electronAPI.confirmWindowClose?.();
+            else await w.electronAPI.cancelWindowClose?.();
+          } finally {
+            popoutCloseInFlightRef.current = false;
+          }
+        });
+
         // Popout: move this tab back to the main window
         w.electronAPI.onMoveToMain(() => {
           const tab = tabsRef.current[0];
@@ -344,6 +661,7 @@ const App: React.FC = () => {
               isDirty: false,
               savedContent: result.content,
               eol: result.eol,
+              encoding: result.encoding ?? DEFAULT_ENCODING,
             }]);
             setActiveTabId(id);
           }
@@ -378,7 +696,7 @@ const App: React.FC = () => {
               continue;
             }
 
-            const result = await w.electronAPI.readFile(filePath);
+            const result = await w.electronAPI.readFile(filePath, { trackRecent: true });
             if (result) {
               const fileName = file.name || result.filePath.split(/[\\/]/).pop();
               const id = `tab-${Date.now()}-${i}`;
@@ -389,7 +707,8 @@ const App: React.FC = () => {
                 content: result.content,
                 isDirty: false,
                 savedContent: result.content,
-                eol: result.eol
+                eol: result.eol,
+                encoding: result.encoding ?? DEFAULT_ENCODING,
               }]);
               setActiveTabId(id);
             }
@@ -426,11 +745,11 @@ const App: React.FC = () => {
 
   /**
    * Prompts the user for unsaved-change resolution on a single tab.
-   * Returns true if the tab is safe to close, false if the user cancelled
-   * (or saving failed).
+   * Returns `{ proceed: true, snapshot }` if the tab is safe to close, or
+   * `{ proceed: false }` if the user cancelled (or saving failed).
    */
-  const confirmCloseTab = async (tab: Tab): Promise<boolean> => {
-    if (!tab.isDirty) return true;
+  const confirmCloseTab = async (tab: Tab): Promise<{ proceed: boolean; snapshot?: Tab }> => {
+    if (!tab.isDirty) return { proceed: true, snapshot: { ...tab } };
 
     const w = window as any;
     // Fallback to window.confirm if native dialog IPC is unavailable (e.g. tests).
@@ -444,55 +763,129 @@ const App: React.FC = () => {
       choice = ok ? 'dont-save' : 'cancel';
     }
 
-    if (choice === 'cancel') return false;
+    if (choice === 'cancel') return { proceed: false };
 
     if (choice === 'save') {
-      if (!w.electronAPI?.saveFileDialog) return false;
+      if (!w.electronAPI?.saveFileDialog) return { proceed: false };
       try {
-        const savedPath = await w.electronAPI.saveFileDialog(tab.filePath, tab.content, tab.eol ?? 'LF');
-        if (!savedPath) return false; // Save dialog cancelled – abort close
+        const savedPath = await invokeSaveFileDialog(w, tab, tab.filePath);
+        if (!savedPath) return { proceed: false }; // Save dialog cancelled – abort close
+        const fileName = savedPath.split(/[\\/]/).pop() || savedPath;
+        const savedContent = contentAsSaved(tab);
+        return {
+          proceed: true,
+          snapshot: {
+            ...tab,
+            content: savedContent,
+            filePath: savedPath,
+            title: fileName,
+            isDirty: false,
+            savedContent,
+          },
+        };
       } catch (err) {
         console.error('Error saving file during close', err);
-        return false;
+        return { proceed: false };
       }
     }
 
-    return true;
+    // choice === 'dont-save'
+    if (tab.filePath) {
+      const cleanContent = tab.savedContent ?? tab.content;
+      return {
+        proceed: true,
+        snapshot: {
+          ...tab,
+          content: cleanContent,
+          savedContent: cleanContent,
+          isDirty: false,
+        },
+      };
+    }
+
+    return { proceed: true, snapshot: { ...tab } };
+  };
+
+  const MAX_CLOSED_TABS = 20;
+
+  const pushClosedTabs = (snapshots: Tab[]) => {
+    if (snapshots.length === 0) return;
+    const next = [...closedTabsRef.current, ...snapshots].slice(-MAX_CLOSED_TABS);
+    closedTabsRef.current = next;
+    setClosedTabs(next);
+  };
+
+  const reopenClosedTab = async () => {
+    setTabContextMenu(null);
+    const stack = [...closedTabsRef.current];
+    const restored = stack.pop();
+    if (!restored) return;
+
+    closedTabsRef.current = stack;
+    setClosedTabs(stack);
+
+    if (restored.filePath) {
+      const existing = tabsRef.current.find(t => t.filePath === restored.filePath);
+      if (existing) {
+        setActiveTabId(existing.id);
+        return;
+      }
+    }
+
+    let tabToRestore: Tab = { ...restored };
+    const w = window as any;
+    if (restored.filePath && !restored.isDirty && w.electronAPI?.readFile) {
+      try {
+        const fileData = await w.electronAPI.readFile(restored.filePath);
+        if (fileData) {
+          tabToRestore = {
+            ...restored,
+            content: fileData.content,
+            savedContent: fileData.content,
+            eol: fileData.eol ?? restored.eol ?? 'LF',
+            encoding: fileData.encoding ?? restored.encoding ?? DEFAULT_ENCODING,
+            isDirty: false,
+          };
+        }
+      } catch {
+        // Fall back to cached snapshot if reading from disk fails
+      }
+    }
+
+    setTabs(prev => {
+      if (prev.some(t => t.id === tabToRestore.id)) return prev;
+      return [...prev, tabToRestore];
+    });
+    setActiveTabId(tabToRestore.id);
   };
 
   const closeTab = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-
-    const tab = tabs.find(t => t.id === id);
-    if (!tab) return;
-
-    const proceed = await confirmCloseTab(tab);
-    if (!proceed) return;
-
-    const newTabs = tabs.filter(t => t.id !== id);
-    setTabs(newTabs);
-
-    if (activeTabId === id) {
-      setActiveTabId(newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null);
-    }
+    await closeTabsByIds([id]);
   };
 
   /**
    * Closes a set of tabs, prompting the user about unsaved changes for each
    * one. Tabs the user chooses to keep (via Cancel) remain open. Used by the
-   * "Close Other Tabs" and "Close All Tabs" context-menu actions.
+   * close button, keyboard shortcut, and context-menu close actions.
    */
   const closeTabsByIds = async (idsToClose: string[]) => {
     const targets = tabsRef.current.filter(t => idsToClose.includes(t.id));
     const closedIds: string[] = [];
+    const closedSnapshots: Tab[] = [];
 
     for (const tab of targets) {
       // eslint-disable-next-line no-await-in-loop
-      const ok = await confirmCloseTab(tab);
-      if (ok) closedIds.push(tab.id);
+      const { proceed, snapshot } = await confirmCloseTab(tab);
+      if (proceed) {
+        closedIds.push(tab.id);
+        if (snapshot) closedSnapshots.push(snapshot);
+      }
     }
 
     if (closedIds.length === 0) return;
+
+    pushClosedTabs(closedSnapshots);
 
     const remaining = tabsRef.current.filter(t => !closedIds.includes(t.id));
     setTabs(remaining);
@@ -500,6 +893,14 @@ const App: React.FC = () => {
     const currentActive = activeTabIdRef.current;
     if (currentActive && closedIds.includes(currentActive)) {
       setActiveTabId(remaining.length > 0 ? remaining[remaining.length - 1].id : null);
+    }
+    const currentSecondary = secondaryTabIdRef.current;
+    if (remaining.length === 0) {
+      setViewMode('single');
+      setSecondaryTabId(null);
+    } else if (currentSecondary && closedIds.includes(currentSecondary)) {
+      const fallback = remaining.find(t => t.id !== currentActive) ?? remaining[0];
+      setSecondaryTabId(fallback ? fallback.id : null);
     }
   };
 
@@ -532,6 +933,37 @@ const App: React.FC = () => {
     setRenameTarget({ tabId, currentName: tab.title });
     setRenameInput(tab.title);
     setRenameError(null);
+  };
+
+  const copyTextToClipboard = async (text: string) => {
+    const w = window as any;
+    if (w.electronAPI?.copyToClipboard) {
+      await w.electronAPI.copyToClipboard(text);
+    } else if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    }
+  };
+
+  const handleCopyFullPath = async (tabId: string) => {
+    setTabContextMenu(null);
+    const tab = tabsRef.current.find(t => t.id === tabId);
+    if (!tab?.filePath) return;
+    await copyTextToClipboard(tab.filePath);
+  };
+
+  const handleCopyFilename = async (tabId: string) => {
+    setTabContextMenu(null);
+    const tab = tabsRef.current.find(t => t.id === tabId);
+    if (!tab) return;
+    await copyTextToClipboard(tab.title);
+  };
+
+  const handleRevealInFolder = async (tabId: string) => {
+    setTabContextMenu(null);
+    const tab = tabsRef.current.find(t => t.id === tabId);
+    if (!tab?.filePath) return;
+    const w = window as any;
+    await w.electronAPI?.showItemInFolder?.(tab.filePath);
   };
 
   const closeRenameModal = () => {
@@ -613,10 +1045,21 @@ const App: React.FC = () => {
   };
 
   const activeTab = tabs.find(t => t.id === activeTabId);
+  const effectiveSecondaryTabId =
+    secondaryTabId && tabs.some(t => t.id === secondaryTabId)
+      ? secondaryTabId
+      : (tabs.find(t => t.id !== activeTabId)?.id ?? activeTabId ?? null);
+  const secondaryTab = tabs.find(t => t.id === effectiveSecondaryTabId);
+  diffModifiedTabIdRef.current = secondaryTab?.id ?? null;
 
   const inferredLanguage = activeTab ? inferLanguageFromFilename(activeTab.filePath ?? activeTab.title) : 'plaintext';
   const effectiveLanguage = activeTab?.language ?? inferredLanguage;
   const isLanguageInferred = !activeTab?.language;
+
+  const secondaryInferredLanguage = secondaryTab
+    ? inferLanguageFromFilename(secondaryTab.filePath ?? secondaryTab.title)
+    : 'plaintext';
+  const secondaryEffectiveLanguage = secondaryTab?.language ?? secondaryInferredLanguage;
 
   const handleLanguageChange = (languageId: string) => {
     if (!activeTabId) return;
@@ -627,6 +1070,262 @@ const App: React.FC = () => {
     if (!activeTabId) return;
     setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, eol, isDirty: true } : t));
   };
+
+  /**
+   * "Save with Encoding": saves the active tab in `encoding` and only switches
+   * the tab's encoding once the save succeeds. The buffer is left untouched
+   * unless the user accepted the lossy-save warning, in which case it is
+   * updated to match what was written (unrepresentable characters -> `?`).
+   */
+  const handleSaveWithEncoding = async (encoding: EncodingKind) => {
+    const w = window as any;
+    const tab = tabsRef.current.find(t => t.id === activeTabIdRef.current);
+    if (!tab || !w.electronAPI?.saveFileDialog) return;
+    const candidate: Tab = { ...tab, encoding };
+    try {
+      const savedPath = await invokeSaveFileDialog(w, candidate, tab.filePath);
+      if (!savedPath) return;
+      const fileName = savedPath.split(/[\\/]/).pop() || savedPath;
+      const savedContent = contentAsSaved(candidate);
+      setTabs(prev => prev.map(t =>
+        t.id === tab.id
+          ? { ...t, ...savedContentPatch(tab, savedContent), encoding, filePath: savedPath, title: fileName, isDirty: false, savedContent }
+          : t
+      ));
+    } catch (e) {
+      console.error('Error saving file with encoding', e);
+    }
+  };
+
+  /**
+   * "Reopen with Encoding": re-reads the active tab's file from disk, decoding
+   * it as `encoding` (e.g. to fix a mis-detected file). Unsaved changes are
+   * discarded after confirmation.
+   */
+  const handleReopenWithEncoding = async (encoding: EncodingKind) => {
+    const w = window as any;
+    const tab = tabsRef.current.find(t => t.id === activeTabIdRef.current);
+    if (!tab?.filePath || !w.electronAPI?.readFile) return;
+
+    if (tab.isDirty) {
+      const label = ENCODING_LABEL[encoding];
+      const ok = w.electronAPI.confirmReopenWithEncoding
+        ? await w.electronAPI.confirmReopenWithEncoding(tab.title, label)
+        : typeof window.confirm === 'function' &&
+          window.confirm(`Reopen "${tab.title}" as ${label}? Unsaved changes will be lost.`);
+      if (!ok) return;
+    }
+
+    try {
+      const result = await w.electronAPI.readFile(tab.filePath, { encoding });
+      if (!result) return;
+      setTabs(prev => prev.map(t =>
+        t.id === tab.id
+          ? {
+              ...t,
+              content: result.content,
+              savedContent: result.content,
+              eol: result.eol ?? t.eol ?? 'LF',
+              encoding: result.encoding ?? encoding,
+              isDirty: false,
+            }
+          : t
+      ));
+    } catch (e) {
+      console.error('Error reopening file with encoding', e);
+    }
+  };
+
+  const handleToggleAlwaysOnTop = async () => {
+    const w = window as any;
+    if (w.electronAPI?.toggleAlwaysOnTop) {
+      try {
+        const next = await w.electronAPI.toggleAlwaysOnTop();
+        setAlwaysOnTop(Boolean(next));
+        return;
+      } catch {
+        // Fall through to local toggle if IPC fails
+      }
+    }
+    setAlwaysOnTop(prev => !prev);
+  };
+
+  const toggleSplitView = () => {
+    setViewMode(prev => {
+      const next = prev === 'split' ? 'single' : 'split';
+      if (next === 'split' && (!secondaryTabId || !tabsRef.current.some(t => t.id === secondaryTabId))) {
+        const candidate = tabsRef.current.find(t => t.id !== activeTabIdRef.current) ?? tabsRef.current[0];
+        if (candidate) setSecondaryTabId(candidate.id);
+      }
+      return next;
+    });
+  };
+
+  const toggleDiffView = () => {
+    setViewMode(prev => {
+      const next = prev === 'diff' ? 'single' : 'diff';
+      if (next === 'diff' && (!secondaryTabId || !tabsRef.current.some(t => t.id === secondaryTabId))) {
+        const candidate = tabsRef.current.find(t => t.id !== activeTabIdRef.current) ?? tabsRef.current[0];
+        if (candidate) setSecondaryTabId(candidate.id);
+      }
+      return next;
+    });
+  };
+
+  const handleOpenInSplitView = (tabId: string) => {
+    setTabContextMenu(null);
+    setSecondaryTabId(tabId);
+    setViewMode('split');
+  };
+
+  const handleCompareWithActiveTab = (tabId: string) => {
+    setTabContextMenu(null);
+    setSecondaryTabId(tabId);
+    setViewMode('diff');
+  };
+
+  const handleSwapSplitTabs = () => {
+    if (!activeTabId || !effectiveSecondaryTabId) return;
+    const prevActive = activeTabId;
+    setActiveTabId(effectiveSecondaryTabId);
+    setSecondaryTabId(prevActive);
+  };
+
+  const updateTabContent = (tabId: string, value: string) => {
+    setTabs(prev =>
+      prev.map(t => {
+        if (t.id !== tabId || t.content === value) return t;
+        const isDirty = t.savedContent === undefined ? true : value !== t.savedContent;
+        return { ...t, content: value, isDirty };
+      }),
+    );
+  };
+
+  const handleSecondaryEditorChange = (value: string | undefined) => {
+    if (!effectiveSecondaryTabId || typeof value === 'undefined') return;
+    updateTabContent(effectiveSecondaryTabId, value);
+  };
+
+  /**
+   * Wires the diff editor's modified (right-hand) side back into tab state.
+   * The listener is registered once per mount, so it reads the target tab id
+   * from a ref that is refreshed on every render (the tab may be swapped).
+   *
+   * The original (left-hand) side shows the active tab, so it becomes the
+   * primary editor: Find, Go to Line, text operations and the status bar
+   * follow it instead of the unmounted single-view editor.
+   */
+  const handleDiffEditorMount = (diffEditor: any) => {
+    diffEditorDisposableRef.current?.dispose();
+    diffEditorDisposableRef.current = null;
+    const originalEditor = diffEditor?.getOriginalEditor?.();
+    if (originalEditor) handlePrimaryEditorMount(originalEditor);
+    const modifiedEditor = diffEditor?.getModifiedEditor?.();
+    if (!modifiedEditor?.onDidChangeModelContent) return;
+    diffEditorDisposableRef.current = modifiedEditor.onDidChangeModelContent(() => {
+      const targetId = diffModifiedTabIdRef.current;
+      if (!targetId) return;
+      updateTabContent(targetId, modifiedEditor.getValue());
+    });
+  };
+
+  const applyJumpOnEditor = React.useCallback((
+    editor: any,
+    lineNumber: number,
+    column = 1,
+    matchLength?: number,
+  ) => {
+    if (!editor) return;
+    if (matchLength && matchLength > 0 && typeof editor.setSelection === 'function') {
+      editor.setSelection({
+        startLineNumber: lineNumber,
+        startColumn: column,
+        endLineNumber: lineNumber,
+        endColumn: column + matchLength,
+      });
+    } else if (typeof editor.setPosition === 'function') {
+      editor.setPosition({ lineNumber, column });
+    }
+    editor.revealLineInCenter?.(lineNumber);
+    editor.focus?.();
+    setCursorPosition({ line: lineNumber, column });
+  }, []);
+
+  /**
+   * Mount handler for the editor that shows the active tab (single view, the
+   * split view's left pane, or the diff view's original side). Points
+   * `editorRef` at it and keeps the status bar cursor/selection in sync.
+   */
+  const handlePrimaryEditorMount = (editor: any) => {
+    editorDisposablesRef.current.forEach(d => d.dispose());
+    editorDisposablesRef.current = [];
+    editorRef.current = editor;
+
+    const position = editor.getPosition?.();
+    if (position) {
+      setCursorPosition({ line: position.lineNumber, column: position.column });
+    }
+    updateSelectionSummary(editor);
+
+    const cursorDisposable = editor.onDidChangeCursorPosition?.((event: any) => {
+      setCursorPosition({ line: event.position.lineNumber, column: event.position.column });
+    });
+    if (cursorDisposable) {
+      editorDisposablesRef.current.push(cursorDisposable);
+    }
+
+    const selectionDisposable = editor.onDidChangeCursorSelection?.(() => {
+      updateSelectionSummary(editor);
+    });
+    if (selectionDisposable) {
+      editorDisposablesRef.current.push(selectionDisposable);
+    }
+
+    if (pendingJumpRef.current) {
+      const jump = pendingJumpRef.current;
+      pendingJumpRef.current = null;
+      applyJumpOnEditor(editor, jump.lineNumber, jump.column, jump.matchLength);
+    }
+  };
+
+  const handleGoToLine = (lineNumber: number, column = 1) => {
+    applyJumpOnEditor(editorRef.current, lineNumber, column);
+  };
+
+  const handleSelectFindMatch = (match: TabSearchMatch) => {
+    if (match.tabId !== activeTabId) {
+      pendingJumpRef.current = {
+        lineNumber: match.lineNumber,
+        column: match.column,
+        matchLength: match.matchLength,
+      };
+      setActiveTabId(match.tabId);
+      setTimeout(() => {
+        if (pendingJumpRef.current && editorRef.current) {
+          const jump = pendingJumpRef.current;
+          pendingJumpRef.current = null;
+          applyJumpOnEditor(editorRef.current, jump.lineNumber, jump.column, jump.matchLength);
+        }
+      }, 0);
+    } else {
+      applyJumpOnEditor(editorRef.current, match.lineNumber, match.column, match.matchLength);
+    }
+  };
+
+  const handleReplaceAllInTabs = (
+    updatedByTabId: Record<string, { content: string; replacements: number }>,
+  ) => {
+    setTabs(prev =>
+      prev.map(t => {
+        const update = updatedByTabId[t.id];
+        if (!update) return t;
+        const isDirty = t.savedContent === undefined ? true : update.content !== t.savedContent;
+        return { ...t, content: update.content, isDirty };
+      }),
+    );
+  };
+
+  const activeTabLineCount = activeTab ? activeTab.content.split('\n').length : 1;
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
     e.dataTransfer.setData('text/plain', index.toString());
@@ -744,17 +1443,27 @@ const App: React.FC = () => {
               <span style={{ flexGrow: 1, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', fontSize: '13px' }}>
                 {tab.title} {tab.isDirty && '*'}
               </span>
-              <X
-                size={14}
-                style={{ marginLeft: 8, opacity: 0.6, flexShrink: 0 }}
-                onClick={(e) => closeTab(e, tab.id)}
-                onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
-                onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.6')}
-              />
+              <span
+                title="Close Tab (Ctrl+W)"
+                data-testid={`close-tab-btn-${tab.id}`}
+                style={{ display: 'inline-flex', alignItems: 'center' }}
+              >
+                <X
+                  size={14}
+                  aria-label={`Close ${tab.title}`}
+                  style={{ marginLeft: 8, opacity: 0.6, flexShrink: 0 }}
+                  onClick={(e) => closeTab(e, tab.id)}
+                  onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                  onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.6')}
+                />
+              </span>
             </div>
           ))}
           {/* Add Tab Button */}
           <div
+            data-testid="add-tab-button"
+            title="New Tab (Ctrl+N)"
+            aria-label="New Tab"
             onClick={addNewTab}
             style={{ padding: '8px', cursor: 'pointer', color: colors.foreground, display: 'flex', alignItems: 'center', flexShrink: 0 }}
           >
@@ -763,12 +1472,176 @@ const App: React.FC = () => {
           {/* Empty space – double-click to open a new tab */}
           <div
             data-testid="tab-bar-spacer"
+            title="Double-click to create a new tab"
             style={{ flexGrow: 1, minWidth: '24px' }}
             onDoubleClick={addNewTab}
           />
         </div>
         {/* Action group: pinned to the right, never scrolls with tabs. */}
-        <div style={{ display: 'flex', alignItems: 'center', paddingRight: '8px', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', paddingRight: '8px', flexShrink: 0 }}>
+          <button
+            data-testid="always-on-top-toggle"
+            aria-label={alwaysOnTop ? 'Unpin Window (Disable Always on Top)' : 'Pin Window (Always on Top)'}
+            aria-pressed={alwaysOnTop}
+            onClick={handleToggleAlwaysOnTop}
+            title={alwaysOnTop ? 'Unpin Window (Always on Top active)' : 'Pin Window Always on Top'}
+            style={{
+              width: '28px',
+              height: '24px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              cursor: 'pointer',
+              borderRadius: '4px',
+              border: `1px solid ${colors.tabHover}`,
+              backgroundColor: alwaysOnTop ? colors.tabActiveBackground : colors.tabBackground,
+              color: colors.foreground,
+              opacity: alwaysOnTop ? 1 : 0.55,
+            }}
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path d="M5 2.5h6l-1 4 2 2v1H4v-1l2-2-1-4z" />
+              <line x1="8" y1="9.5" x2="8" y2="14" />
+            </svg>
+          </button>
+          <button
+            data-testid="split-view-toggle"
+            aria-label={viewMode === 'split' ? 'Close Split View' : 'Side-by-Side Split View'}
+            aria-pressed={viewMode === 'split'}
+            onClick={toggleSplitView}
+            title={viewMode === 'split' ? 'Close Split View' : 'Toggle Side-by-Side Split View'}
+            style={{
+              width: '28px',
+              height: '24px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              cursor: 'pointer',
+              borderRadius: '4px',
+              border: `1px solid ${colors.tabHover}`,
+              backgroundColor: viewMode === 'split' ? colors.tabActiveBackground : colors.tabBackground,
+              color: colors.foreground,
+              opacity: viewMode === 'split' ? 1 : 0.55,
+            }}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <rect x="2" y="2.5" width="12" height="11" rx="1.5" />
+              <line x1="8" y1="2.5" x2="8" y2="13.5" />
+            </svg>
+          </button>
+          <button
+            data-testid="diff-view-toggle"
+            aria-label={viewMode === 'diff' ? 'Close Diff View' : 'Diff View (Compare Tabs)'}
+            aria-pressed={viewMode === 'diff'}
+            onClick={toggleDiffView}
+            title={viewMode === 'diff' ? 'Close Diff View' : 'Toggle Diff View (Compare Tabs)'}
+            style={{
+              width: '28px',
+              height: '24px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              cursor: 'pointer',
+              borderRadius: '4px',
+              border: `1px solid ${colors.tabHover}`,
+              backgroundColor: viewMode === 'diff' ? colors.tabActiveBackground : colors.tabBackground,
+              color: colors.foreground,
+              opacity: viewMode === 'diff' ? 1 : 0.55,
+              fontSize: '11px',
+              fontWeight: 600,
+              fontFamily: 'monospace',
+            }}
+          >
+            ±
+          </button>
+          <button
+            data-testid="find-in-tabs-toggle"
+            aria-label={isFindInTabsOpen ? 'Close Find in Open Tabs' : 'Find in All Open Tabs'}
+            aria-pressed={isFindInTabsOpen}
+            onClick={() => setIsFindInTabsOpen(prev => !prev)}
+            title="Find in All Open Tabs (Cmd/Ctrl+Shift+F)"
+            style={{
+              width: '28px',
+              height: '24px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              cursor: 'pointer',
+              borderRadius: '4px',
+              border: `1px solid ${colors.tabHover}`,
+              backgroundColor: isFindInTabsOpen ? colors.tabActiveBackground : colors.tabBackground,
+              color: colors.foreground,
+              opacity: isFindInTabsOpen ? 1 : 0.55,
+            }}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <circle cx="7" cy="7" r="4.5" />
+              <line x1="10.5" y1="10.5" x2="14" y2="14" />
+            </svg>
+          </button>
+          <button
+            data-testid="whitespace-toggle"
+            aria-label={showWhitespace ? 'Hide Whitespace & EOL' : 'Show Whitespace & EOL'}
+            aria-pressed={showWhitespace}
+            onClick={() => setShowWhitespace(prev => !prev)}
+            title={showWhitespace ? 'Hide Whitespace & EOL' : 'Show Whitespace & EOL'}
+            style={{
+              width: '28px',
+              height: '24px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              cursor: 'pointer',
+              borderRadius: '4px',
+              border: `1px solid ${colors.tabHover}`,
+              backgroundColor: showWhitespace ? colors.tabActiveBackground : colors.tabBackground,
+              color: colors.foreground,
+              opacity: showWhitespace ? 1 : 0.55,
+              fontSize: '12px',
+              fontWeight: 600,
+              fontFamily: 'monospace',
+            }}
+          >
+            ¶
+          </button>
           <button
             data-testid="word-wrap-toggle"
             aria-label={wordWrap ? 'Disable Word Wrap' : 'Enable Word Wrap'}
@@ -841,9 +1714,225 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* Split / Diff control strip */}
+      {!isPopoutMode && activeTab && viewMode !== 'single' && (
+        <div
+          data-testid="split-diff-toolbar"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+            padding: '4px 10px',
+            backgroundColor: colors.tabBackground,
+            borderTop: `1px solid ${colors.tabHover}`,
+            borderBottom: `1px solid ${colors.tabHover}`,
+            fontSize: '12px',
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+            <span style={{ fontWeight: 600 }}>
+              {viewMode === 'diff' ? 'Diff View:' : 'Split View:'}
+            </span>
+            <span data-testid="split-primary-tab-label" style={{ opacity: 0.9 }}>
+              {activeTab.title}
+            </span>
+            {viewMode === 'diff' && (
+              <span
+                data-testid="diff-readonly-hint"
+                title="In Diff View the left (original) side is read-only; edit the right side or use Split View."
+                style={{ opacity: 0.6, fontSize: '11px' }}
+              >
+                (read-only)
+              </span>
+            )}
+            <button
+              data-testid="swap-split-tabs-button"
+              onClick={handleSwapSplitTabs}
+              title="Swap Left and Right Tabs"
+              style={{
+                padding: '1px 6px',
+                fontSize: '11px',
+                cursor: 'pointer',
+                borderRadius: '3px',
+                border: `1px solid ${colors.tabHover}`,
+                backgroundColor: colors.background,
+                color: colors.foreground,
+              }}
+            >
+              ⇄
+            </button>
+            <label htmlFor="secondary-tab-select" style={{ opacity: 0.75 }}>
+              {viewMode === 'diff' ? 'Compare with:' : 'Right pane:'}
+            </label>
+            <select
+              id="secondary-tab-select"
+              data-testid="secondary-tab-select"
+              value={effectiveSecondaryTabId ?? ''}
+              onChange={e => setSecondaryTabId(e.target.value)}
+              style={{
+                padding: '2px 6px',
+                fontSize: '12px',
+                borderRadius: '3px',
+                border: `1px solid ${colors.tabHover}`,
+                backgroundColor: colors.background,
+                color: colors.foreground,
+              }}
+            >
+              {tabs.map(t => (
+                <option key={t.id} value={t.id}>
+                  {t.title}{t.isDirty ? ' *' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              data-testid="split-mode-button"
+              aria-pressed={viewMode === 'split'}
+              onClick={() => setViewMode('split')}
+              style={{
+                padding: '2px 8px',
+                fontSize: '11px',
+                cursor: 'pointer',
+                borderRadius: '3px',
+                border: `1px solid ${colors.tabHover}`,
+                backgroundColor: viewMode === 'split' ? colors.tabActiveBackground : 'transparent',
+                color: colors.foreground,
+              }}
+            >
+              Split
+            </button>
+            <button
+              data-testid="diff-mode-button"
+              aria-pressed={viewMode === 'diff'}
+              onClick={() => setViewMode('diff')}
+              style={{
+                padding: '2px 8px',
+                fontSize: '11px',
+                cursor: 'pointer',
+                borderRadius: '3px',
+                border: `1px solid ${colors.tabHover}`,
+                backgroundColor: viewMode === 'diff' ? colors.tabActiveBackground : 'transparent',
+                color: colors.foreground,
+              }}
+            >
+              Diff
+            </button>
+            <button
+              data-testid="close-split-diff-button"
+              onClick={() => setViewMode('single')}
+              title="Return to Single Editor View"
+              style={{
+                padding: '2px 8px',
+                fontSize: '11px',
+                cursor: 'pointer',
+                borderRadius: '3px',
+                border: `1px solid ${colors.tabHover}`,
+                backgroundColor: 'transparent',
+                color: colors.foreground,
+              }}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Editor Area */}
       <div style={{ flexGrow: 1, overflow: 'hidden', backgroundColor: activeTab ? surfaceBgFor(activeTab.themeOverride) : undefined }}>
         {activeTab ? (
+          !isPopoutMode && viewMode === 'split' && secondaryTab ? (
+            <div
+              data-testid="split-view-container"
+              style={{ display: 'flex', width: '100%', height: '100%' }}
+            >
+              <div
+                data-testid="split-left-pane"
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  height: '100%',
+                  borderRight: `1px solid ${colors.tabHover}`,
+                }}
+              >
+                <Editor
+                  height="100%"
+                  theme={(activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark')) === 'light' ? 'light' : 'vs-dark'}
+                  path={activeTab.title}
+                  language={effectiveLanguage}
+                  value={activeTab.content}
+                  onChange={handleEditorChange}
+                  onMount={handlePrimaryEditorMount}
+                  options={{
+                    minimap: { enabled: false },
+                    fontSize: 14,
+                    wordWrap: wordWrap ? 'on' : 'off',
+                    renderWhitespace: showWhitespace ? 'all' : 'none',
+                    renderControlCharacters: showWhitespace,
+                    formatOnType: true,
+                    formatOnPaste: true,
+                    padding: { top: 6 },
+                    lineNumbersMinChars: 5,
+                  }}
+                />
+              </div>
+              <div
+                data-testid="split-right-pane"
+                style={{ flex: 1, minWidth: 0, height: '100%' }}
+              >
+                <Editor
+                  height="100%"
+                  theme={(secondaryTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark')) === 'light' ? 'light' : 'vs-dark'}
+                  path={`${secondaryTab.title}-split`}
+                  language={secondaryEffectiveLanguage}
+                  value={secondaryTab.content}
+                  onChange={handleSecondaryEditorChange}
+                  options={{
+                    minimap: { enabled: false },
+                    fontSize: 14,
+                    wordWrap: wordWrap ? 'on' : 'off',
+                    renderWhitespace: showWhitespace ? 'all' : 'none',
+                    renderControlCharacters: showWhitespace,
+                    formatOnType: true,
+                    formatOnPaste: true,
+                    padding: { top: 6 },
+                    lineNumbersMinChars: 5,
+                  }}
+                />
+              </div>
+            </div>
+          ) : !isPopoutMode && viewMode === 'diff' && secondaryTab ? (
+            <div
+              data-testid="diff-view-container"
+              style={{ width: '100%', height: '100%' }}
+            >
+              {DiffEditorComponent ? (
+                <DiffEditorComponent
+                  height="100%"
+                  theme={(activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark')) === 'light' ? 'light' : 'vs-dark'}
+                  original={activeTab.content}
+                  modified={secondaryTab.content}
+                  originalLanguage={effectiveLanguage}
+                  modifiedLanguage={secondaryEffectiveLanguage}
+                  onMount={handleDiffEditorMount}
+                  options={{
+                    renderSideBySide: true,
+                    // Only the right-hand (modified) side is editable; its edits are
+                    // synced back to the compared tab in handleDiffEditorMount.
+                    readOnly: false,
+                    originalEditable: false,
+                    fontSize: 14,
+                    wordWrap: wordWrap ? 'on' : 'off',
+                    renderWhitespace: showWhitespace ? 'all' : 'none',
+                    minimap: { enabled: false },
+                  }}
+                />
+              ) : null}
+            </div>
+          ) : (
           <Editor
             height="100%"
             theme={(activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark')) === 'light' ? 'light' : 'vs-dark'} /* Per-tab override falls back to global theme */
@@ -851,49 +1940,49 @@ const App: React.FC = () => {
             language={effectiveLanguage}
             value={activeTab.content}
             onChange={handleEditorChange}
-            onMount={(editor) => {
-              editorDisposablesRef.current.forEach(d => d.dispose());
-              editorDisposablesRef.current = [];
-              editorRef.current = editor;
-
-              const position = editor.getPosition?.();
-              if (position) {
-                setCursorPosition({ line: position.lineNumber, column: position.column });
-              }
-              updateSelectionSummary(editor);
-
-              const cursorDisposable = editor.onDidChangeCursorPosition?.((event: any) => {
-                setCursorPosition({ line: event.position.lineNumber, column: event.position.column });
-              });
-              if (cursorDisposable) {
-                editorDisposablesRef.current.push(cursorDisposable);
-              }
-
-              const selectionDisposable = editor.onDidChangeCursorSelection?.(() => {
-                updateSelectionSummary(editor);
-              });
-              if (selectionDisposable) {
-                editorDisposablesRef.current.push(selectionDisposable);
-              }
-            }}
+            onMount={handlePrimaryEditorMount}
             options={{
               minimap: { enabled: true },
               fontSize: 14,
               wordWrap: wordWrap ? 'on' : 'off',
+              renderWhitespace: showWhitespace ? 'all' : 'none',
+              renderControlCharacters: showWhitespace,
               formatOnType: true,
               formatOnPaste: true,
               padding: { top: 6 },
               lineNumbersMinChars: 6,
             }}
           />
+          )
         ) : (
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#666' }}>
-            <p>No tabs open. Press Cmd/Ctrl+N to create a new file.</p>
+          <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#666', gap: '6px' }}>
+            <p style={{ margin: 0 }}>No tabs open. Press Cmd/Ctrl+N to create a new file.</p>
+            <p style={{ margin: 0, fontSize: '12px', opacity: 0.8 }} data-testid="empty-state-shortcuts-hint">
+              Press Cmd/Ctrl+Shift+T to reopen a closed tab, or Shift+F1 to view all shortcuts.
+            </p>
           </div>
         )}
       </div>
 
+      {!isPopoutMode && (
+        <FindInTabsPanel
+          isOpen={isFindInTabsOpen}
+          tabs={tabs}
+          onClose={() => setIsFindInTabsOpen(false)}
+          onSelectMatch={handleSelectFindMatch}
+          onReplaceAllInTabs={handleReplaceAllInTabs}
+        />
+      )}
+
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      <ShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
+      <GoToLineModal
+        isOpen={isGoToLineOpen}
+        currentLine={cursorPosition.line}
+        maxLine={activeTabLineCount}
+        onGoToLine={handleGoToLine}
+        onClose={() => setIsGoToLineOpen(false)}
+      />
 
       {/* Tab context menu */}
       {tabContextMenu && (
@@ -941,30 +2030,118 @@ const App: React.FC = () => {
               <span>Pop out to new window</span>
               <span style={{ opacity: 0.45, fontSize: '11px', flexShrink: 0 }}>Ctrl+Shift+N</span>
             </div>
+            <div
+              role="menuitem"
+              data-testid="tab-context-split-view"
+              onClick={() => handleOpenInSplitView(tabContextMenu.tabId)}
+              onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+              style={{
+                padding: '7px 16px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                color: colors.foreground,
+                backgroundColor: 'transparent',
+              }}
+            >
+              Open in Split View
+            </div>
+            <div
+              role="menuitem"
+              data-testid="tab-context-compare-active"
+              onClick={() => handleCompareWithActiveTab(tabContextMenu.tabId)}
+              onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+              style={{
+                padding: '7px 16px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                color: colors.foreground,
+                backgroundColor: 'transparent',
+              }}
+            >
+              Compare with Active Tab
+            </div>
 
             {(() => {
               const target = tabs.find(t => t.id === tabContextMenu.tabId);
-              const canRename = !!target?.filePath;
+              const hasFilePath = !!target?.filePath;
               return (
-                <div
-                  role="menuitem"
-                  aria-disabled={!canRename}
-                  data-testid="tab-context-rename"
-                  onClick={() => { if (canRename) handleRenameTab(tabContextMenu.tabId); }}
-                  onMouseEnter={e => { if (canRename) (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
-                  style={{
-                    padding: '7px 16px',
-                    cursor: canRename ? 'pointer' : 'not-allowed',
-                    fontSize: '13px',
-                    color: colors.foreground,
-                    opacity: canRename ? 1 : 0.45,
-                    backgroundColor: 'transparent',
-                  }}
-                  title={canRename ? undefined : 'Save the file before renaming'}
-                >
-                  Rename…
-                </div>
+                <>
+                  <div
+                    role="menuitem"
+                    aria-disabled={!hasFilePath}
+                    data-testid="tab-context-rename"
+                    onClick={() => { if (hasFilePath) handleRenameTab(tabContextMenu.tabId); }}
+                    onMouseEnter={e => { if (hasFilePath) (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                    style={{
+                      padding: '7px 16px',
+                      cursor: hasFilePath ? 'pointer' : 'not-allowed',
+                      fontSize: '13px',
+                      color: colors.foreground,
+                      opacity: hasFilePath ? 1 : 0.45,
+                      backgroundColor: 'transparent',
+                    }}
+                    title={hasFilePath ? undefined : 'Save the file before renaming'}
+                  >
+                    Rename…
+                  </div>
+                  <div
+                    role="menuitem"
+                    aria-disabled={!hasFilePath}
+                    data-testid="tab-context-copy-path"
+                    onClick={() => { if (hasFilePath) handleCopyFullPath(tabContextMenu.tabId); }}
+                    onMouseEnter={e => { if (hasFilePath) (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                    style={{
+                      padding: '7px 16px',
+                      cursor: hasFilePath ? 'pointer' : 'not-allowed',
+                      fontSize: '13px',
+                      color: colors.foreground,
+                      opacity: hasFilePath ? 1 : 0.45,
+                      backgroundColor: 'transparent',
+                    }}
+                    title={hasFilePath ? undefined : 'Save the file before copying its path'}
+                  >
+                    Copy Full Path
+                  </div>
+                  <div
+                    role="menuitem"
+                    data-testid="tab-context-copy-filename"
+                    onClick={() => handleCopyFilename(tabContextMenu.tabId)}
+                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                    style={{
+                      padding: '7px 16px',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      color: colors.foreground,
+                      backgroundColor: 'transparent',
+                    }}
+                  >
+                    Copy Filename
+                  </div>
+                  <div
+                    role="menuitem"
+                    aria-disabled={!hasFilePath}
+                    data-testid="tab-context-reveal-in-folder"
+                    onClick={() => { if (hasFilePath) handleRevealInFolder(tabContextMenu.tabId); }}
+                    onMouseEnter={e => { if (hasFilePath) (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                    style={{
+                      padding: '7px 16px',
+                      cursor: hasFilePath ? 'pointer' : 'not-allowed',
+                      fontSize: '13px',
+                      color: colors.foreground,
+                      opacity: hasFilePath ? 1 : 0.45,
+                      backgroundColor: 'transparent',
+                    }}
+                    title={hasFilePath ? undefined : 'Save the file before revealing in folder'}
+                  >
+                    Reveal in Finder / Explorer
+                  </div>
+                </>
               );
             })()}
 
@@ -1056,9 +2233,14 @@ const App: React.FC = () => {
                 fontSize: '13px',
                 color: colors.foreground,
                 backgroundColor: 'transparent',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '24px',
               }}
             >
-              Close Tab
+              <span>Close Tab</span>
+              <span style={{ opacity: 0.45, fontSize: '11px', flexShrink: 0 }}>Ctrl+W</span>
             </div>
 
             {tabs.length > 1 && (
@@ -1096,6 +2278,35 @@ const App: React.FC = () => {
             >
               Close All Tabs
             </div>
+
+            {(() => {
+              const canReopen = closedTabs.length > 0;
+              return (
+                <div
+                  role="menuitem"
+                  aria-disabled={!canReopen}
+                  data-testid="tab-context-reopen-closed"
+                  onClick={() => { if (canReopen) reopenClosedTab(); }}
+                  onMouseEnter={e => { if (canReopen) (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                  style={{
+                    padding: '7px 16px',
+                    cursor: canReopen ? 'pointer' : 'not-allowed',
+                    fontSize: '13px',
+                    color: colors.foreground,
+                    opacity: canReopen ? 1 : 0.45,
+                    backgroundColor: 'transparent',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '24px',
+                  }}
+                >
+                  <span>Reopen Closed Tab</span>
+                  <span style={{ opacity: 0.45, fontSize: '11px', flexShrink: 0 }}>Ctrl+Shift+T</span>
+                </div>
+              );
+            })()}
           </div>
         </>
       )}
@@ -1223,7 +2434,20 @@ const App: React.FC = () => {
           }}
         >
           {activeTab && (
-            <span data-testid="status-cursor-position">
+            <span
+              data-testid="status-cursor-position"
+              role="button"
+              tabIndex={0}
+              title="Go to Line (Ctrl+G)"
+              onClick={() => setIsGoToLineOpen(true)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setIsGoToLineOpen(true);
+                }
+              }}
+              style={{ cursor: 'pointer' }}
+            >
               Ln {cursorPosition.line}, Col {cursorPosition.column}
             </span>
           )}
@@ -1237,9 +2461,40 @@ const App: React.FC = () => {
               Chars {activeTab.content.length}
             </span>
           )}
+          {activeTab && showWhitespace && (
+            <span
+              data-testid="status-whitespace-indicator"
+              title="Showing whitespace & EOL"
+            >
+              WS+EOL ({activeTab.eol ?? 'LF'})
+            </span>
+          )}
+          {alwaysOnTop && (
+            <span
+              data-testid="status-always-on-top"
+              title="Window is pinned Always on Top"
+            >
+              📌 Pinned
+            </span>
+          )}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center' }}>
+        {activeTab && (
+          <EncodingSelector
+            encoding={activeTab.encoding ?? DEFAULT_ENCODING}
+            canReopen={!!activeTab.filePath}
+            onReopenWithEncoding={handleReopenWithEncoding}
+            onSaveWithEncoding={handleSaveWithEncoding}
+            colors={{
+              background: colors.background,
+              foreground: colors.foreground,
+              tabBackground: colors.tabBackground,
+              tabActiveBackground: colors.tabActiveBackground,
+              tabHover: colors.tabHover,
+            }}
+          />
+        )}
         {activeTab && (
           <LineEndingSelector
             eol={activeTab.eol ?? 'LF'}

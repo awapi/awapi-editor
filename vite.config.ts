@@ -8,6 +8,11 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    include: [
+      '**/*.{test,spec}.?(c|m)[jt]s?(x)',
+      '../main/**/*.{test,spec}.?(c|m)[jt]s?(x)',
+      '../shared/**/*.{test,spec}.?(c|m)[jt]s?(x)',
+    ],
   },
   plugins: [
     react(),

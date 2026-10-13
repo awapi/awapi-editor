@@ -1,6 +1,6 @@
 {
   "name": "awapi-editor",
-  "version": "0.3.4",
+  "version": "0.2.5",
   "description": "A fast, lightweight, universal text editor",
   "main": "dist/main/main.js",
   "scripts": {

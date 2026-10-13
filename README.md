@@ -60,7 +60,7 @@ AwapiEditor is a fast, lightweight, universal text editor built specifically for
 ### Prerequisites
 
 - **Node.js** (v22 or newer)
-- **npm** (v10 or newer)
+- **pnpm** (v10 or newer)
 - [just](https://github.com/casey/just) command runner (optional, but highly recommended)
 
 ### Installation
@@ -73,7 +73,7 @@ AwapiEditor is a fast, lightweight, universal text editor built specifically for
 
 2. Install dependencies:
    ```bash
-   npm install
+   pnpm install
    # or with just:
    just install
    ```
@@ -82,7 +82,7 @@ AwapiEditor is a fast, lightweight, universal text editor built specifically for
 
 Start the development server with Hot Module Replacement (HMR) for the renderer and auto-restart for the main process:
 ```bash
-npm run dev
+pnpm run dev
 # or with just:
 just dev
 ```
@@ -91,12 +91,12 @@ just dev
 
 All core application logic requires testing via Vitest. Ensure everything passes before submitting changes.
 ```bash
-npm run test
+pnpm run test
 # or with just:
 just test
 
 # Check for TypeScript issues explicitly:
-npm run typecheck
+pnpm run typecheck
 # or:
 just typecheck
 ```
@@ -105,7 +105,7 @@ just typecheck
 
 To build the application for your current operating system:
 ```bash
-npm run package
+pnpm run package
 # or:
 just build
 ```

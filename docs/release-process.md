@@ -16,7 +16,7 @@
 
 Local packaging (current OS only):
 ```bash
-npm run package
+pnpm run package
 # or:
 just build
 ```

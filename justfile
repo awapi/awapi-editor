@@ -10,31 +10,31 @@ default:
     
 # Install dependencies
 install:
-    npm install
+    pnpm install
 
 # Run the application in development mode
 dev:
-    npm run dev
+    pnpm run dev
 
 # Run unit tests continuously (watch mode)
 test:
-    npm run test:watch
+    pnpm run test:watch
 
 # Run unit tests once
 test-once:
-    npm run test
+    pnpm run test
 
 # Typecheck the codebase strictly
 typecheck:
-    npm run typecheck
+    pnpm run typecheck
 
 # Build the application into production bundles
 build:
-    npm run build
+    pnpm run build
 
 # Package the app for local installation (cross-platform, no GitHub publish)
 package:
-    npm run package
+    pnpm run package
     @OS=$(uname -s); \
     if [ "$OS" = "Darwin" ]; then \
         open release/AwapiEditor-*.dmg; \
@@ -55,7 +55,7 @@ package:
 # Clear caches and build outputs
 clean:
     rm -rf dist node_modules
-    npm cache clean --force
+    pnpm store prune
 
 # Create a new version tag (e.g. 1.0.0) and push to trigger the GitHub Actions
 # release workflow. The workflow builds on macOS / Linux / Windows and uploads

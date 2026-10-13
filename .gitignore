@@ -70,3 +70,7 @@ $RECYCLE.BIN/
 *.tsbuildinfo
 
 local/
+
+# This project uses pnpm (pnpm-lock.yaml); ignore stray npm/yarn lockfiles
+package-lock.json
+yarn.lock

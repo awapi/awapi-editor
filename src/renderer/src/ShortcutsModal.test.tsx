@@ -28,6 +28,18 @@ describe('ShortcutsModal', () => {
     expect(screen.getByText('Middle-Click Tab')).toBeTruthy();
   });
 
+  it('lists the integrated terminal shortcuts', () => {
+    render(
+      <ThemeProvider>
+        <ShortcutsModal isOpen={true} onClose={vi.fn()} />
+      </ThemeProvider>
+    );
+    expect(screen.getByText('Toggle Integrated Terminal')).toBeTruthy();
+    expect(screen.getByText('Ctrl + ` (all platforms)')).toBeTruthy();
+    expect(screen.getByText('New Integrated Terminal')).toBeTruthy();
+    expect(screen.getByText('Ctrl + Shift + ` (all platforms)')).toBeTruthy();
+  });
+
   it('calls onClose when clicking Close button, overlay, or pressing Escape', () => {
     const onClose = vi.fn();
     render(

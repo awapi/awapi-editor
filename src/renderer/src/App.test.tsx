@@ -98,6 +98,27 @@ const mockEditorInstance = {
 
 let capturedDiffProps: any = undefined;
 
+// xterm.js needs a real canvas/layout; App tests only need a stand-in.
+vi.mock('@xterm/xterm', () => ({
+  Terminal: vi.fn(function (this: any) {
+    this.options = {};
+    this.loadAddon = vi.fn();
+    this.open = vi.fn();
+    this.attachCustomKeyEventHandler = vi.fn();
+    this.onData = vi.fn(() => ({ dispose: vi.fn() }));
+    this.onResize = vi.fn(() => ({ dispose: vi.fn() }));
+    this.write = vi.fn();
+    this.focus = vi.fn();
+    this.dispose = vi.fn();
+    this.hasSelection = vi.fn(() => false);
+  }),
+}));
+vi.mock('@xterm/addon-fit', () => ({
+  FitAddon: vi.fn(function (this: any) {
+    this.fit = vi.fn();
+  }),
+}));
+
 vi.mock('@monaco-editor/react', () => ({
   default: vi.fn((props: any) => {
     capturedEditorOnChange = props.onChange;
@@ -150,6 +171,16 @@ describe('Editor Core Tests', () => {
       syncWatchedFiles: vi.fn().mockResolvedValue(undefined),
       confirmReloadExternalChange: vi.fn().mockResolvedValue('reload'),
       showItemInFolder: vi.fn().mockResolvedValue(undefined),
+      openInTerminal: vi.fn().mockResolvedValue(true),
+      onToggleTerminal: vi.fn(),
+      onNewTerminal: vi.fn(),
+      ptyCreate: vi.fn().mockResolvedValue({ ok: true, id: 1, cwd: '/tmp', shell: 'zsh' }),
+      ptyKill: vi.fn().mockResolvedValue(undefined),
+      ptyWrite: vi.fn(),
+      ptyResize: vi.fn(),
+      onPtyData: vi.fn(() => () => {}),
+      onPtyExit: vi.fn(() => () => {}),
+      readClipboardText: vi.fn().mockResolvedValue(''),
       copyToClipboard: vi.fn().mockResolvedValue(undefined),
       removeListeners: vi.fn(),
       readFile: vi.fn().mockResolvedValue({ filePath: '/mock/path/file.txt', content: 'mock content' }),
@@ -165,6 +196,109 @@ describe('Editor Core Tests', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe('Integrated terminal', () => {
+    let now = 0;
+    beforeEach(() => {
+      // Space out toggles beyond the 150ms double-trigger guard.
+      now = 10_000;
+      vi.spyOn(Date, 'now').mockImplementation(() => (now += 1000));
+      (window as any).electronAPI.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [{ id: 'tab-1', title: 'alpha.txt', filePath: '/proj/alpha.txt', content: 'a', isDirty: false, eol: 'LF' }],
+      });
+      (window as any).electronAPI.readFile = vi.fn().mockResolvedValue({ filePath: '/proj/alpha.txt', content: 'a', eol: 'LF' });
+      (window as any).electronAPI.ptyCreate.mockResolvedValue({ ok: true, id: 7, cwd: '/proj', shell: 'zsh' });
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    const renderApp = async () => {
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+    };
+
+    it('toggles the panel with Ctrl+`, starting a shell in the active file folder', async () => {
+      await renderApp();
+      expect(screen.queryByTestId('terminal-panel')).toBeNull();
+
+      fireEvent.keyDown(window, { key: '`', code: 'Backquote', ctrlKey: true });
+      await waitFor(() => expect(screen.getByTestId('terminal-tab-7').textContent).toContain('zsh — proj'));
+      expect((window as any).electronAPI.ptyCreate).toHaveBeenCalledWith({ cwd: '/proj/alpha.txt', cols: 80, rows: 24 });
+      expect(screen.getByTestId('terminal-panel').style.display).toBe('flex');
+
+      fireEvent.keyDown(window, { key: '`', code: 'Backquote', ctrlKey: true });
+      expect(screen.getByTestId('terminal-panel').style.display).toBe('none');
+
+      // Re-opening shows the existing session instead of starting another shell.
+      fireEvent.keyDown(window, { key: '`', code: 'Backquote', ctrlKey: true });
+      expect(screen.getByTestId('terminal-panel').style.display).toBe('flex');
+      expect((window as any).electronAPI.ptyCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('opens an additional terminal with Ctrl+Shift+` and View -> New Terminal', async () => {
+      (window as any).electronAPI.ptyCreate
+        .mockResolvedValueOnce({ ok: true, id: 7, cwd: '/proj', shell: 'zsh' })
+        .mockResolvedValueOnce({ ok: true, id: 8, cwd: '/proj', shell: 'zsh' })
+        .mockResolvedValueOnce({ ok: true, id: 9, cwd: '/proj', shell: 'zsh' });
+      await renderApp();
+
+      fireEvent.keyDown(window, { key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true });
+      await waitFor(() => screen.getByTestId('terminal-tab-7'));
+      fireEvent.keyDown(window, { key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true });
+      await waitFor(() => screen.getByTestId('terminal-tab-8'));
+      expect(screen.getByTestId('terminal-tab-8').getAttribute('aria-selected')).toBe('true');
+      expect(screen.getByTestId('terminal-panel').style.display).toBe('flex');
+
+      const menuNew = (window as any).electronAPI.onNewTerminal.mock.calls[0][0];
+      act(() => menuNew());
+      await waitFor(() => screen.getByTestId('terminal-tab-9'));
+      expect((window as any).electronAPI.ptyCreate).toHaveBeenCalledTimes(3);
+      expect((window as any).electronAPI.ptyCreate).toHaveBeenCalledWith({ cwd: '/proj/alpha.txt', cols: 80, rows: 24 });
+    });
+
+    it('collapses a double trigger (menu accelerator + keydown) into one toggle', async () => {
+      await renderApp();
+      now = 50_000;
+      (Date.now as any).mockImplementation(() => now);
+      fireEvent.keyDown(window, { key: '`', code: 'Backquote', ctrlKey: true });
+      const menuToggle = (window as any).electronAPI.onToggleTerminal.mock.calls[0][0];
+      act(() => menuToggle());
+      await waitFor(() => screen.getByTestId('terminal-panel'));
+      expect(screen.getByTestId('terminal-panel').style.display).toBe('flex');
+    });
+
+    it('toggles from the status bar button and the View menu', async () => {
+      await renderApp();
+      fireEvent.click(screen.getByTestId('status-bar-terminal-toggle'));
+      await waitFor(() => screen.getByTestId('terminal-panel'));
+      expect(screen.getByTestId('status-bar-terminal-toggle').getAttribute('aria-pressed')).toBe('true');
+
+      const menuToggle = (window as any).electronAPI.onToggleTerminal.mock.calls[0][0];
+      act(() => menuToggle());
+      expect(screen.getByTestId('terminal-panel').style.display).toBe('none');
+      expect(screen.getByTestId('status-bar-terminal-toggle').getAttribute('aria-pressed')).toBe('false');
+    });
+
+    it('kills the shell and hides the panel when the last terminal is closed', async () => {
+      await renderApp();
+      fireEvent.click(screen.getByTestId('status-bar-terminal-toggle'));
+      await waitFor(() => screen.getByTestId('terminal-close-7'));
+      fireEvent.click(screen.getByTestId('terminal-close-7'));
+
+      expect((window as any).electronAPI.ptyKill).toHaveBeenCalledWith(7);
+      expect(screen.queryByTestId('terminal-panel')).toBeNull();
+    });
+
+    it('is unavailable when the pty bridge is missing', async () => {
+      delete (window as any).electronAPI.ptyCreate;
+      await renderApp();
+      expect(screen.queryByTestId('status-bar-terminal-toggle')).toBeNull();
+      fireEvent.keyDown(window, { key: '`', code: 'Backquote', ctrlKey: true });
+      expect(screen.queryByTestId('terminal-panel')).toBeNull();
+    });
   });
 
   it('should pass a basic sanity check', () => {
@@ -1260,7 +1394,10 @@ describe('Editor Core Tests', () => {
       await waitFor(() => expect(screen.queryByText(/\*/)).toBeNull());
     });
 
-    it('supports Copy Full Path, Copy Filename, and Reveal in Finder / Explorer in tab context menu', async () => {
+    it('supports Copy Full Path, Copy Filename, Reveal in Finder / Explorer, and Open in Integrated / External Terminal in tab context menu', async () => {
+      (window as any).electronAPI.ptyCreate
+        .mockResolvedValueOnce({ ok: true, id: 1, cwd: '/tmp', shell: 'zsh' })
+        .mockResolvedValueOnce({ ok: true, id: 2, cwd: '/Users/me', shell: 'zsh' });
       (window as any).electronAPI.loadSession.mockResolvedValue({
         activeTabId: 'tab-1',
         tabs: [
@@ -1291,12 +1428,33 @@ describe('Editor Core Tests', () => {
       fireEvent.click(screen.getByTestId('tab-context-reveal-in-folder'));
       await waitFor(() => expect((window as any).electronAPI.showItemInFolder).toHaveBeenCalledWith('/tmp/alpha.txt'));
 
-      // For Untitled tab, Copy Full Path and Reveal in Folder are disabled
+      fireEvent.contextMenu(alphaTab);
+      fireEvent.click(screen.getByTestId('tab-context-open-in-external-terminal'));
+      await waitFor(() => expect((window as any).electronAPI.openInTerminal).toHaveBeenCalledWith('/tmp/alpha.txt'));
+      expect(screen.queryByTestId('tab-context-open-in-external-terminal')).toBeNull();
+
+      fireEvent.contextMenu(alphaTab);
+      fireEvent.click(screen.getByTestId('tab-context-open-in-integrated-terminal'));
+      await waitFor(() => expect((window as any).electronAPI.ptyCreate).toHaveBeenCalledWith({ cwd: '/tmp/alpha.txt', cols: 80, rows: 24 }));
+      await waitFor(() => expect(screen.getByTestId('terminal-panel')).toBeTruthy());
+
+      // For Untitled tab, Copy Full Path and Reveal in Folder are disabled, but both
+      // terminal items stay enabled and open in the home folder (null path).
       const untitledTab = screen.getByText('Untitled').closest('div[draggable]') as HTMLElement;
       fireEvent.contextMenu(untitledTab);
       expect(screen.getByTestId('tab-context-copy-path').getAttribute('aria-disabled')).toBe('true');
       expect(screen.getByTestId('tab-context-reveal-in-folder').getAttribute('aria-disabled')).toBe('true');
       expect(screen.getByTestId('tab-context-copy-filename').getAttribute('aria-disabled')).toBeNull();
+      expect(screen.getByTestId('tab-context-open-in-external-terminal').getAttribute('aria-disabled')).toBeNull();
+      expect(screen.getByTestId('tab-context-open-in-integrated-terminal').getAttribute('aria-disabled')).toBeNull();
+      fireEvent.click(screen.getByTestId('tab-context-open-in-external-terminal'));
+      await waitFor(() => expect((window as any).electronAPI.openInTerminal).toHaveBeenLastCalledWith(null));
+
+      fireEvent.contextMenu(untitledTab);
+      fireEvent.click(screen.getByTestId('tab-context-open-in-integrated-terminal'));
+      await waitFor(() => expect((window as any).electronAPI.ptyCreate).toHaveBeenLastCalledWith({ cwd: null, cols: 80, rows: 24 }));
+      expect((window as any).electronAPI.openInTerminal).toHaveBeenCalledTimes(2);
+      expect((window as any).electronAPI.ptyCreate).toHaveBeenCalledTimes(2);
     });
 
     it('auto-reloads clean tabs on external change, prompts on dirty tabs, and marks deleted files dirty', async () => {

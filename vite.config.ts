@@ -27,8 +27,11 @@ export default defineConfig({
         vite: {
           build: {
             outDir: resolve(__dirname, 'dist/main'),
-            rollupOptions: {
-              external: ['electron']
+            // Vite 8 + vite-plugin-electron read `rolldownOptions` first; an
+            // `external` under `rollupOptions` would be silently dropped.
+            rolldownOptions: {
+              // node-pty is a native module; it must be loaded from node_modules at runtime.
+              external: ['electron', 'node-pty']
             }
           }
         }

@@ -15,6 +15,10 @@ export interface AppSettings {
   theme?: string | null;
   /** Most recently opened/saved file paths (newest first). */
   recentFiles?: string[];
+  /** "Open in External Terminal" app. null/undefined = automatic; see TerminalPreference. */
+  externalTerminal?: string | null;
+  /** Shell for the integrated terminal. null/undefined = automatic; see TerminalPreference. */
+  integratedShell?: string | null;
 }
 
 /** Lazily compute settings file path (not at module load time) */

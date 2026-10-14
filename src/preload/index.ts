@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EncodingKind } from '../shared/encodings';
+import type { PtyCreateOptions, PtyCreateResult, PtyDataEvent, PtyExitEvent, TerminalChoices } from '../shared/terminal';
 
 export const electronAPI = {
   /** Resolves with every file that could be read, or null if canceled / none could be read. */
@@ -36,7 +37,29 @@ export const electronAPI = {
   openDirDialog: () => ipcRenderer.invoke('settings:openDirDialog'),
   openInExplorer: (dirPath: string) => ipcRenderer.invoke('settings:openInExplorer', dirPath),
   showItemInFolder: (filePath: string) => ipcRenderer.invoke('file:showInFolder', filePath),
+  /** Opens the configured external terminal in the folder containing `filePath` (null = home folder). Resolves false on failure. */
+  openInTerminal: (filePath: string | null) => ipcRenderer.invoke('file:openInTerminal', filePath) as Promise<boolean>,
+  /** Terminal apps and shells available on this machine (for Preferences). */
+  getTerminalChoices: () => ipcRenderer.invoke('terminal:getChoices') as Promise<TerminalChoices>,
+  /** Integrated terminal: start a shell. `cwd` may be a file (its folder is used) or null (home). */
+  ptyCreate: (options: PtyCreateOptions) => ipcRenderer.invoke('pty:create', options) as Promise<PtyCreateResult>,
+  ptyWrite: (id: number, data: string) => ipcRenderer.send('pty:write', id, data),
+  ptyResize: (id: number, cols: number, rows: number) => ipcRenderer.send('pty:resize', id, cols, rows),
+  ptyKill: (id: number) => ipcRenderer.invoke('pty:kill', id) as Promise<void>,
+  /** Subscribes to shell output for this window's sessions. Returns an unsubscribe function. */
+  onPtyData: (callback: (event: PtyDataEvent) => void) => {
+    const listener = (_: unknown, event: PtyDataEvent) => callback(event);
+    ipcRenderer.on('pty:data', listener);
+    return () => { ipcRenderer.removeListener('pty:data', listener); };
+  },
+  /** Subscribes to shell exits for this window's sessions. Returns an unsubscribe function. */
+  onPtyExit: (callback: (event: PtyExitEvent) => void) => {
+    const listener = (_: unknown, event: PtyExitEvent) => callback(event);
+    ipcRenderer.on('pty:exit', listener);
+    return () => { ipcRenderer.removeListener('pty:exit', listener); };
+  },
   copyToClipboard: (text: string) => ipcRenderer.invoke('clipboard:writeText', text),
+  readClipboardText: () => ipcRenderer.invoke('clipboard:readText') as Promise<string>,
   /** Report this window's open files (and their encodings) for external-change detection. */
   syncWatchedFiles: (
     files: Array<{ filePath: string; encoding?: EncodingKind }>,
@@ -72,6 +95,8 @@ export const electronAPI = {
   onGoToLine: (callback: () => void) => ipcRenderer.on('menu:goToLine', () => callback()),
   onToggleWhitespace: (callback: () => void) => ipcRenderer.on('menu:toggleWhitespace', () => callback()),
   onToggleSplitView: (callback: () => void) => ipcRenderer.on('menu:toggleSplitView', () => callback()),
+  onToggleTerminal: (callback: () => void) => ipcRenderer.on('menu:toggleTerminal', () => callback()),
+  onNewTerminal: (callback: () => void) => ipcRenderer.on('menu:newTerminal', () => callback()),
   onToggleDiffView: (callback: () => void) => ipcRenderer.on('menu:toggleDiffView', () => callback()),
   getAlwaysOnTop: () => ipcRenderer.invoke('window:getAlwaysOnTop') as Promise<boolean>,
   setAlwaysOnTop: (flag: boolean) => ipcRenderer.invoke('window:setAlwaysOnTop', flag) as Promise<boolean>,

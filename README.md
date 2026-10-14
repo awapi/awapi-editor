@@ -10,6 +10,7 @@ AwapiEditor is a fast, lightweight, universal text editor built specifically for
 - **Cross-Platform:** Runs seamlessly natively on macOS, Windows, and Linux.
 - **Modern Tech Stack:** Built on top of Electron, featuring a React 19 UI layer, strictly typed with TypeScript.
 - **Powerful Editor Engine:** Uses Monaco Editor (`@monaco-editor/react`) for a rich, high-performance coding experience.
+- **Integrated & External Terminals:** A built-in terminal panel (`` Ctrl+` `` to toggle, `` Ctrl+Shift+` `` for a new one) and **Open in External Terminal**, both starting in the current file's folder, with your choice of shell and terminal app in **Preferences**.
 - **Lightning Fast Build Tools:** Powered by Vite (`vite-plugin-electron`, `vite-plugin-electron-renderer`) for an unmatched developer experience and fast Hot Module Replacement (HMR).
 - **Secure architecture:** Strict separation between the Main, Preload, and Renderer processes.
 
@@ -62,6 +63,7 @@ AwapiEditor is a fast, lightweight, universal text editor built specifically for
 - **Node.js** (v22 or newer)
 - **pnpm** (v10 or newer)
 - [just](https://github.com/casey/just) command runner (optional, but highly recommended)
+- **Linux only:** a C/C++ toolchain and Python 3 (e.g. `sudo apt install build-essential python3`). The integrated terminal's `node-pty` module ships prebuilt binaries for macOS and Windows but is compiled during `pnpm install` on Linux.
 
 ### Installation
 

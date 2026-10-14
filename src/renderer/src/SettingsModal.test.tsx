@@ -161,4 +161,89 @@ describe('SettingsModal', () => {
       expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ sessionDir: null, theme: 'light' })
     );
   });
+
+  describe('Terminal section', () => {
+    const choices = {
+      platform: 'win32',
+      externalTerminals: [
+        { id: 'windows-terminal', label: 'Windows Terminal', detail: 'wt.exe' },
+        { id: 'cmd', label: 'Command Prompt', detail: 'cmd.exe' },
+      ],
+      shells: [
+        { id: 'pwsh', label: 'PowerShell 7', detail: 'C:\\pwsh.exe' },
+        { id: 'git-bash', label: 'Git Bash', detail: 'C:\\bash.exe' },
+      ],
+      autoExternalTerminal: 'Windows Terminal',
+      autoShell: 'PowerShell 7',
+    };
+
+    beforeEach(() => {
+      mockElectronAPI.getTerminalChoices = vi.fn().mockResolvedValue(choices);
+    });
+
+    it('is hidden when terminal choices are unavailable', async () => {
+      delete mockElectronAPI.getTerminalChoices;
+      renderModal(true);
+      await waitFor(() => screen.getByTestId('session-dir-path'));
+      expect(screen.queryByTestId('settings-terminal-section')).toBeNull();
+    });
+
+    it('lists automatic, detected, and custom options with the automatic target named', async () => {
+      renderModal(true);
+      const shell = (await screen.findByTestId('settings-integrated-shell')) as HTMLSelectElement;
+      expect(Array.from(shell.options).map(o => o.textContent)).toEqual([
+        'Automatic (PowerShell 7)',
+        'PowerShell 7',
+        'Git Bash',
+        'Custom…',
+      ]);
+      expect(shell.value).toBe('');
+      const external = screen.getByTestId('settings-external-terminal') as HTMLSelectElement;
+      expect(external.options[0].textContent).toBe('Automatic (Windows Terminal)');
+    });
+
+    it('reflects stored preferences, including custom values', async () => {
+      mockElectronAPI.loadSettings.mockResolvedValue({
+        sessionDir: null,
+        integratedShell: 'git-bash',
+        externalTerminal: 'C:\\Tools\\term.exe',
+      });
+      renderModal(true);
+      const shell = (await screen.findByTestId('settings-integrated-shell')) as HTMLSelectElement;
+      expect(shell.value).toBe('git-bash');
+      expect((screen.getByTestId('settings-external-terminal') as HTMLSelectElement).value).toBe('__custom__');
+      expect((screen.getByTestId('settings-external-terminal-custom') as HTMLInputElement).value).toBe('C:\\Tools\\term.exe');
+    });
+
+    it('saves a detected choice or automatic immediately', async () => {
+      renderModal(true);
+      const shell = await screen.findByTestId('settings-integrated-shell');
+      fireEvent.change(shell, { target: { value: 'git-bash' } });
+      await waitFor(() => expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ integratedShell: 'git-bash' }));
+
+      fireEvent.change(shell, { target: { value: '' } });
+      await waitFor(() => expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ integratedShell: null }));
+
+      fireEvent.change(screen.getByTestId('settings-external-terminal'), { target: { value: 'cmd' } });
+      await waitFor(() => expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ externalTerminal: 'cmd' }));
+    });
+
+    it('saves a custom path on blur or Enter, but not before one is typed', async () => {
+      renderModal(true);
+      const shell = await screen.findByTestId('settings-integrated-shell');
+      fireEvent.change(shell, { target: { value: '__custom__' } });
+      expect(mockElectronAPI.saveSettings).not.toHaveBeenCalled();
+
+      const input = screen.getByTestId('settings-integrated-shell-custom');
+      fireEvent.change(input, { target: { value: '  C:\\msys64\\usr\\bin\\bash.exe  ' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() =>
+        expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ integratedShell: 'C:\\msys64\\usr\\bin\\bash.exe' }),
+      );
+
+      // Blurring with the same value does not save again.
+      fireEvent.blur(input);
+      expect(mockElectronAPI.saveSettings).toHaveBeenCalledTimes(1);
+    });
+  });
 });

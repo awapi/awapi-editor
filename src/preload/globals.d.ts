@@ -1,4 +1,12 @@
 import type { EncodingKind } from '../shared/encodings';
+import type {
+  PtyCreateOptions,
+  PtyCreateResult,
+  PtyDataEvent,
+  PtyExitEvent,
+  TerminalChoices,
+  TerminalPreference,
+} from '../shared/terminal';
 
 export type { EncodingKind };
 
@@ -37,7 +45,17 @@ declare global {
       ) => Promise<{ ok: true; newPath: string } | { ok: false; error: string }>;
       getPathForFile: (file: File) => string;
       showItemInFolder: (filePath: string) => Promise<void>;
+      /** null = home folder (e.g. for unsaved tabs). */
+      openInTerminal: (filePath: string | null) => Promise<boolean>;
+      getTerminalChoices: () => Promise<TerminalChoices>;
+      ptyCreate: (options: PtyCreateOptions) => Promise<PtyCreateResult>;
+      ptyWrite: (id: number, data: string) => void;
+      ptyResize: (id: number, cols: number, rows: number) => void;
+      ptyKill: (id: number) => Promise<void>;
+      onPtyData: (callback: (event: PtyDataEvent) => void) => () => void;
+      onPtyExit: (callback: (event: PtyExitEvent) => void) => () => void;
       copyToClipboard: (text: string) => Promise<void>;
+      readClipboardText: () => Promise<string>;
       /** Report this window's open files (and their encodings) for external-change detection. */
       syncWatchedFiles: (files: Array<{ filePath: string; encoding?: EncodingKind }>) => Promise<void>;
       onExternalFileChange: (
@@ -70,8 +88,19 @@ declare global {
         }>;
       } | null>;
 
-      loadSettings: () => Promise<{ sessionDir: string | null; theme?: string | null }>;
-      saveSettings: (settings: { sessionDir: string | null; theme?: string | null }) => Promise<boolean>;
+      loadSettings: () => Promise<{
+        sessionDir: string | null;
+        theme?: string | null;
+        externalTerminal?: TerminalPreference;
+        integratedShell?: TerminalPreference;
+      }>;
+      /** Merges the given fields into the stored settings. */
+      saveSettings: (settings: {
+        sessionDir?: string | null;
+        theme?: string | null;
+        externalTerminal?: TerminalPreference;
+        integratedShell?: TerminalPreference;
+      }) => Promise<boolean>;
       applyNativeTheme: (theme: string) => Promise<void>;
       getDefaultSessionDir: () => Promise<string>;
       openDirDialog: () => Promise<string | null>;
@@ -90,6 +119,8 @@ declare global {
       onGoToLine: (callback: () => void) => void;
       onToggleWhitespace: (callback: () => void) => void;
       onToggleSplitView: (callback: () => void) => void;
+      onToggleTerminal: (callback: () => void) => void;
+      onNewTerminal: (callback: () => void) => void;
       onToggleDiffView: (callback: () => void) => void;
       getAlwaysOnTop: () => Promise<boolean>;
       setAlwaysOnTop: (flag: boolean) => Promise<boolean>;

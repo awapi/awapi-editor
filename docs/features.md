@@ -14,12 +14,23 @@ AwapiEditor is designed around a simple philosophy: **deliver the speed, reliabi
 - **Tab Context Menu:**
   - Close Tab (`Cmd/Ctrl+W`), Close Other Tabs, Close All Tabs (with unsaved-change protection), and Reopen Closed Tab (`Cmd/Ctrl+Shift+T`).
   - **Rename on Disk:** Rename the underlying file directly from the tab context menu.
-  - **Tab Path Utilities:** **Copy Full Path**, **Copy Filename**, and **Reveal in Finder / Explorer** directly from the tab context menu.
+  - **Tab Path Utilities:** **Copy Full Path**, **Copy Filename**, **Reveal in Finder / Explorer**, **Open in Integrated Terminal**, and **Open in External Terminal** directly from the tab context menu. Both terminal actions start in the file's folder, or in your home folder for unsaved tabs (see [Terminal](#terminal)).
   - **Split & Diff Actions:** **Open in Split View** and **Compare with Active Tab** directly from the tab context menu.
   - **Per-Tab Editor Theme:** Override the editor surface theme (`Light`, `Dark`, or `Use Default`) per tab independently of the global app theme.
   - **Pop Out to New Window (`Cmd/Ctrl+Shift+N`):** Detach any tab into its own standalone window and move it back to the main window (`Cmd/Ctrl+Shift+M`) at any time.
 - **Always on Top (`View -> Always on Top`):** Pin the editor window (or any pop-out window) above other applications from the `View` menu or the tab-bar pin button (`📌`) for quick note-taking.
 - **Side-by-Side Split & Diff View:** View and edit two tabs side-by-side (`Split View`) or compare any two open tabs using Monaco's built-in side-by-side diff viewer (`Diff View`), with quick pane swapping and tab selection.
+
+### Terminal
+- **Integrated Terminal (`` Ctrl+` ``):** A bottom panel running real shells (via `node-pty`, ConPTY on Windows). Toggle it with `` Ctrl+` `` on every platform, the status-bar terminal button, or `View -> Toggle Terminal`. Opening an empty panel starts a shell in the active file's folder (or your home folder for unsaved tabs).
+  - **Multiple Sessions:** Add terminals with `` Ctrl+Shift+` `` (on every platform), `View -> New Terminal`, or `+`; each starts in the active file's folder (home folder for unsaved tabs). Switch between them in the panel header, and close them with `×`. Shells that exit cleanly close their session; failures stay open showing the exit code.
+  - **Resizable & Persistent:** Drag the panel's top edge to resize; the height is remembered. Hiding the panel keeps sessions and scrollback.
+  - **Copy & Paste:** macOS uses `Cmd+C` / `Cmd+V`. On Windows and Linux, `Ctrl+Shift+C` / `Ctrl+Shift+V` always work, `Ctrl+C` copies when text is selected (otherwise it interrupts the running command), and `Ctrl+V` pastes on Windows.
+  - **Linux Requirements:** The integrated terminal needs glibc 2.34+ (Ubuntu 22.04+, Linux Mint 21+, Debian 12+). On older systems the editor still runs and the panel shows that the terminal is unavailable; **Open in External Terminal** keeps working.
+- **External Terminal:** **Open in External Terminal** (tab context menu) launches a separate terminal application in the file's folder (your home folder for unsaved tabs).
+- **Terminal Preferences:** Choose both in **Preferences -> Terminal**. Each setting offers **Automatic**, the options detected on your machine, or a **Custom…** path.
+  - **Integrated terminal shell:** Automatic uses `$SHELL` on macOS/Linux (as a login shell on macOS so your `PATH` is loaded) and PowerShell 7 → Windows PowerShell → Command Prompt on Windows. Detected options include the shells in `/etc/shells`, and on Windows PowerShell 7, Windows PowerShell, Command Prompt, Git Bash, and WSL.
+  - **External terminal:** Automatic uses Terminal on macOS; Windows Terminal → PowerShell 7 → Windows PowerShell → Command Prompt on Windows; and `$TERMINAL`, then the system default (`x-terminal-emulator`, launched as the real terminal it points to, e.g. GNOME Terminal on Ubuntu 24.04 / Linux Mint or Ptyxis on Ubuntu 25.10), then the first installed of GNOME Terminal, Ptyxis, GNOME Console, Konsole, Xfce Terminal, MATE Terminal, Tilix, Ghostty, WezTerm, Alacritty, kitty, and XTerm on Linux. Detected macOS options include iTerm2, Warp, and Ghostty.
 
 ### Session Persistence & Crash-Safe Backups
 - **Automatic Session Restore:** Reopens your previous tabs and active tab on launch. Clean saved files are re-read fresh from disk.
@@ -49,7 +60,7 @@ AwapiEditor is designed around a simple philosophy: **deliver the speed, reliabi
 - **Word Wrap & Whitespace/EOL Toggles:** Quick toolbar and `View` menu toggles for Word Wrap and Show Whitespace & EOL (`¶`).
 - **Per-Window Zoom:** Zoom In (`Cmd/Ctrl+=` or `Cmd/Ctrl++`), Zoom Out (`Cmd/Ctrl+-`), and Reset Zoom (`Cmd/Ctrl+0`), tracked independently per window.
 - **Keyboard Shortcuts Reference (`Shift+F1`):** Built-in `Help -> Keyboard Shortcuts…` cheat-sheet modal plus hover tooltips on tab controls. (`Cmd/Ctrl+/` is left to Monaco's *Toggle Line Comment*.)
-- **Live Status Bar Metrics:** Displays cursor position (`Ln`, `Col`), selection summary (`Sel lines, chars`), total character count (`Chars`), line ending, and language.
+- **Live Status Bar Metrics:** Displays cursor position (`Ln`, `Col`), selection summary (`Sel lines, chars`), total character count (`Chars`), line ending, and language, plus a terminal button that toggles the [integrated terminal](#terminal).
 - **Themes:** Global Dark and Light themes (synced with the native OS title bar) configurable in **Preferences** (`Cmd/Ctrl+,`).
 - **Update Notifier:** Checks GitHub Releases on startup (and manually via `Help -> Check for Updates…`) and notifies when a newer version is available.
 

@@ -8,7 +8,12 @@ on:
 
 jobs:
   build_and_test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows covers the integrated terminal's ConPTY path (node-pty).
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     
     steps:
       - name: Checkout Code
@@ -29,7 +34,15 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Security Audit
+        if: matrix.os == 'ubuntu-latest'
         run: pnpm audit --audit-level=high
+
+      - name: Check node-pty glibc floor (Linux)
+        if: runner.os == 'Linux'
+        run: bash scripts/check-pty-glibc.sh
+
+      - name: Integrated terminal smoke test (node-pty)
+        run: node scripts/pty-smoke.js
 
       - name: Typecheck
         run: pnpm run typecheck

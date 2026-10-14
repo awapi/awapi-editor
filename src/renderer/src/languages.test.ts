@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   inferLanguageFromFilename,
   getLanguageLabel,
+  filterLanguages,
   SUPPORTED_LANGUAGES,
   DEFAULT_LANGUAGE_ID,
 } from './languages';
@@ -117,5 +118,45 @@ describe('SUPPORTED_LANGUAGES', () => {
     ]) {
       expect(ids.has(id), `missing language: ${id}`).toBe(true);
     }
+  });
+});
+
+describe('filterLanguages', () => {
+  const langs = [
+    { id: 'c', label: 'C' },
+    { id: 'csharp', label: 'C#' },
+    { id: 'javascript', label: 'JavaScript' },
+    { id: 'typescript', label: 'TypeScript' },
+    { id: 'shell', label: 'Shell Script' },
+  ];
+
+  it('returns all languages for an empty or whitespace query', () => {
+    expect(filterLanguages(langs, '')).toEqual(langs);
+    expect(filterLanguages(langs, '   ')).toEqual(langs);
+  });
+
+  it('matches labels case-insensitively', () => {
+    expect(filterLanguages(langs, 'SCRIPT').map(l => l.id)).toEqual([
+      'javascript',
+      'typescript',
+      'shell',
+    ]);
+  });
+
+  it('matches against the language id', () => {
+    expect(filterLanguages(langs, 'csharp').map(l => l.id)).toEqual(['csharp']);
+  });
+
+  it('ranks label prefix matches before substring matches', () => {
+    expect(filterLanguages(langs, 's').map(l => l.id)).toEqual([
+      'shell',
+      'csharp',
+      'javascript',
+      'typescript',
+    ]);
+  });
+
+  it('returns an empty list when nothing matches', () => {
+    expect(filterLanguages(langs, 'zzz')).toEqual([]);
   });
 });

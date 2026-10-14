@@ -181,3 +181,21 @@ export function inferLanguageFromFilename(filename: string | null | undefined): 
 export function getLanguageLabel(id: string): string {
   return SUPPORTED_LANGUAGES.find(l => l.id === id)?.label ?? id;
 }
+
+/**
+ * Filter languages by a case-insensitive search query matched against both the
+ * label and the id. Results whose label starts with the query are ranked first;
+ * the original relative order is otherwise preserved.
+ */
+export function filterLanguages(languages: LanguageOption[], query: string): LanguageOption[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return languages;
+  const prefix: LanguageOption[] = [];
+  const contains: LanguageOption[] = [];
+  for (const lang of languages) {
+    const label = lang.label.toLowerCase();
+    if (label.startsWith(q)) prefix.push(lang);
+    else if (label.includes(q) || lang.id.toLowerCase().includes(q)) contains.push(lang);
+  }
+  return [...prefix, ...contains];
+}

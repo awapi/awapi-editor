@@ -35,25 +35,62 @@ describe('SettingsModal', () => {
     expect(screen.queryByTestId('settings-modal')).toBeNull();
   });
 
-  it('renders the modal when open', async () => {
+  it('renders the modal when open and defaults to the Appearance tab', async () => {
     renderModal(true);
     await waitFor(() => expect(screen.getByTestId('settings-modal')).toBeDefined());
     expect(screen.getByText('Preferences')).toBeDefined();
+    await waitFor(() => expect(screen.getByTestId('settings-tabs')).toBeDefined());
+    expect(screen.getByTestId('settings-tab-appearance').getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByTestId('settings-tab-backup').getAttribute('aria-selected')).toBe('false');
+    expect(screen.getByTestId('settings-appearance-section')).toBeDefined();
+    expect(screen.getByTestId('settings-group-theme')).toBeDefined();
+  });
+
+  it('switches between Appearance, Terminal, and Backup tabs with grouped sections', async () => {
+    mockElectronAPI.getTerminalChoices = vi.fn().mockResolvedValue({
+      platform: 'win32',
+      externalTerminals: [],
+      shells: [],
+      autoExternalTerminal: null,
+      autoShell: null,
+    });
+    renderModal(true);
+    await waitFor(() => expect(screen.getByTestId('settings-tab-appearance')).toBeDefined());
+
+    // Initially on Appearance tab
+    expect(screen.getByTestId('settings-appearance-section')).toBeDefined();
+    expect(screen.queryByTestId('settings-terminal-section')).toBeNull();
+    expect(screen.queryByTestId('settings-backup-section')).toBeNull();
+
+    // Switch to Terminal tab
+    fireEvent.click(screen.getByTestId('settings-tab-terminal'));
+    expect(screen.getByTestId('settings-tab-terminal').getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByTestId('settings-terminal-section')).toBeDefined();
+    expect(screen.getByTestId('settings-group-integrated-terminal')).toBeDefined();
+    expect(screen.getByTestId('settings-group-external-terminal')).toBeDefined();
+    expect(screen.queryByTestId('settings-appearance-section')).toBeNull();
+
+    // Switch to Backup tab
+    fireEvent.click(screen.getByTestId('settings-tab-backup'));
+    expect(screen.getByTestId('settings-tab-backup').getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByTestId('settings-backup-section')).toBeDefined();
+    expect(screen.getByTestId('settings-group-backup-folder')).toBeDefined();
+    expect(screen.queryByTestId('settings-terminal-section')).toBeNull();
   });
 
   it('shows the default session directory when no custom dir is set', async () => {
     renderModal(true);
-    await waitFor(() =>
-      expect(screen.getByTestId('session-dir-path').textContent).toBe('/home/user/.config/awapi-editor')
-    );
+    await waitFor(() => screen.getByTestId('settings-tab-backup'));
+    fireEvent.click(screen.getByTestId('settings-tab-backup'));
+    expect(screen.getByTestId('session-dir-path').textContent).toBe('/home/user/.config/awapi-editor');
   });
 
   it('shows a custom session directory when one is configured', async () => {
     mockElectronAPI.loadSettings.mockResolvedValue({ sessionDir: '/custom/sessions' });
     renderModal(true);
-    await waitFor(() =>
-      expect(screen.getByTestId('session-dir-path').textContent).toBe('/custom/sessions')
-    );
+    await waitFor(() => screen.getByTestId('settings-tab-backup'));
+    fireEvent.click(screen.getByTestId('settings-tab-backup'));
+    expect(screen.getByTestId('session-dir-path').textContent).toBe('/custom/sessions');
   });
 
   it('does not close when overlay is clicked', async () => {
@@ -83,7 +120,8 @@ describe('SettingsModal', () => {
   it('opens dir dialog and saves new path on Change click', async () => {
     mockElectronAPI.openDirDialog.mockResolvedValue('/new/session/path');
     renderModal(true);
-    await waitFor(() => screen.getByTestId('change-dir-btn'));
+    await waitFor(() => screen.getByTestId('settings-tab-backup'));
+    fireEvent.click(screen.getByTestId('settings-tab-backup'));
     fireEvent.click(screen.getByTestId('change-dir-btn'));
     await waitFor(() => expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ sessionDir: '/new/session/path', theme: 'dark' }));
     expect(screen.getByTestId('session-dir-path').textContent).toBe('/new/session/path');
@@ -92,7 +130,8 @@ describe('SettingsModal', () => {
   it('does not save if dir dialog is cancelled', async () => {
     mockElectronAPI.openDirDialog.mockResolvedValue(null);
     renderModal(true);
-    await waitFor(() => screen.getByTestId('change-dir-btn'));
+    await waitFor(() => screen.getByTestId('settings-tab-backup'));
+    fireEvent.click(screen.getByTestId('settings-tab-backup'));
     fireEvent.click(screen.getByTestId('change-dir-btn'));
     await waitFor(() => expect(mockElectronAPI.openDirDialog).toHaveBeenCalled());
     expect(mockElectronAPI.saveSettings).not.toHaveBeenCalled();
@@ -100,7 +139,8 @@ describe('SettingsModal', () => {
 
   it('calls openInExplorer with the resolved path on Open click', async () => {
     renderModal(true);
-    await waitFor(() => screen.getByTestId('open-explorer-btn'));
+    await waitFor(() => screen.getByTestId('settings-tab-backup'));
+    fireEvent.click(screen.getByTestId('settings-tab-backup'));
     fireEvent.click(screen.getByTestId('open-explorer-btn'));
     await waitFor(() =>
       expect(mockElectronAPI.openInExplorer).toHaveBeenCalledWith('/home/user/.config/awapi-editor')
@@ -109,21 +149,26 @@ describe('SettingsModal', () => {
 
   it('shows Reset to Default button only when a custom dir is set', async () => {
     // No custom dir – reset button should not appear
-    renderModal(true);
-    await waitFor(() => screen.getByTestId('session-dir-path'));
+    const { unmount } = renderModal(true);
+    await waitFor(() => screen.getByTestId('settings-tab-backup'));
+    fireEvent.click(screen.getByTestId('settings-tab-backup'));
+    expect(screen.getByTestId('session-dir-path')).toBeDefined();
     expect(screen.queryByTestId('reset-default-btn')).toBeNull();
+    unmount();
 
     // Now with custom dir
     mockElectronAPI.loadSettings.mockResolvedValue({ sessionDir: '/custom/path' });
     renderModal(true);
-    await waitFor(() => screen.getByTestId('reset-default-btn'));
+    await waitFor(() => screen.getByTestId('settings-tab-backup'));
+    fireEvent.click(screen.getByTestId('settings-tab-backup'));
     expect(screen.getByTestId('reset-default-btn')).toBeDefined();
   });
 
   it('resets to default dir and saves null sessionDir', async () => {
     mockElectronAPI.loadSettings.mockResolvedValue({ sessionDir: '/custom/path', theme: 'dark' });
     renderModal(true);
-    await waitFor(() => screen.getByTestId('reset-default-btn'));
+    await waitFor(() => screen.getByTestId('settings-tab-backup'));
+    fireEvent.click(screen.getByTestId('settings-tab-backup'));
     fireEvent.click(screen.getByTestId('reset-default-btn'));
     await waitFor(() => expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ sessionDir: null, theme: 'dark' }));
     await waitFor(() =>
@@ -184,12 +229,15 @@ describe('SettingsModal', () => {
     it('is hidden when terminal choices are unavailable', async () => {
       delete mockElectronAPI.getTerminalChoices;
       renderModal(true);
-      await waitFor(() => screen.getByTestId('session-dir-path'));
+      await waitFor(() => screen.getByTestId('settings-tab-appearance'));
+      expect(screen.queryByTestId('settings-tab-terminal')).toBeNull();
       expect(screen.queryByTestId('settings-terminal-section')).toBeNull();
     });
 
     it('lists automatic, detected, and custom options with the automatic target named', async () => {
       renderModal(true);
+      await waitFor(() => screen.getByTestId('settings-tab-terminal'));
+      fireEvent.click(screen.getByTestId('settings-tab-terminal'));
       const shell = (await screen.findByTestId('settings-integrated-shell')) as HTMLSelectElement;
       expect(Array.from(shell.options).map(o => o.textContent)).toEqual([
         'Automatic (PowerShell 7)',
@@ -209,6 +257,8 @@ describe('SettingsModal', () => {
         externalTerminal: 'C:\\Tools\\term.exe',
       });
       renderModal(true);
+      await waitFor(() => screen.getByTestId('settings-tab-terminal'));
+      fireEvent.click(screen.getByTestId('settings-tab-terminal'));
       const shell = (await screen.findByTestId('settings-integrated-shell')) as HTMLSelectElement;
       expect(shell.value).toBe('git-bash');
       expect((screen.getByTestId('settings-external-terminal') as HTMLSelectElement).value).toBe('__custom__');
@@ -217,6 +267,8 @@ describe('SettingsModal', () => {
 
     it('saves a detected choice or automatic immediately', async () => {
       renderModal(true);
+      await waitFor(() => screen.getByTestId('settings-tab-terminal'));
+      fireEvent.click(screen.getByTestId('settings-tab-terminal'));
       const shell = await screen.findByTestId('settings-integrated-shell');
       fireEvent.change(shell, { target: { value: 'git-bash' } });
       await waitFor(() => expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ integratedShell: 'git-bash' }));
@@ -230,6 +282,8 @@ describe('SettingsModal', () => {
 
     it('saves a custom path on blur or Enter, but not before one is typed', async () => {
       renderModal(true);
+      await waitFor(() => screen.getByTestId('settings-tab-terminal'));
+      fireEvent.click(screen.getByTestId('settings-tab-terminal'));
       const shell = await screen.findByTestId('settings-integrated-shell');
       fireEvent.change(shell, { target: { value: '__custom__' } });
       expect(mockElectronAPI.saveSettings).not.toHaveBeenCalled();
@@ -244,6 +298,31 @@ describe('SettingsModal', () => {
       // Blurring with the same value does not save again.
       fireEvent.blur(input);
       expect(mockElectronAPI.saveSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it('lists console (fixed-width) fonts and saves the selected terminal font', async () => {
+      mockElectronAPI.loadSettings.mockResolvedValue({
+        sessionDir: null,
+        terminalFont: 'MesloLGS NF',
+      });
+      renderModal(true);
+      await waitFor(() => screen.getByTestId('settings-tab-terminal'));
+      fireEvent.click(screen.getByTestId('settings-tab-terminal'));
+
+      const fontSelect = (await screen.findByTestId('settings-terminal-font')) as HTMLSelectElement;
+      expect(fontSelect.value).toBe('MesloLGS NF');
+      expect(fontSelect.options[0].textContent).toBe('Default');
+      expect(Array.from(fontSelect.options).map(o => o.value)).toContain('Consolas');
+
+      fireEvent.change(fontSelect, { target: { value: 'Consolas' } });
+      await waitFor(() =>
+        expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ terminalFont: 'Consolas' }),
+      );
+
+      fireEvent.change(fontSelect, { target: { value: '' } });
+      await waitFor(() =>
+        expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ terminalFont: null }),
+      );
     });
   });
 });

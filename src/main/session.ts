@@ -19,6 +19,8 @@ export interface AppSettings {
   externalTerminal?: string | null;
   /** Shell for the integrated terminal. null/undefined = automatic; see TerminalPreference. */
   integratedShell?: string | null;
+  /** Console (fixed-width) font family for the integrated terminal. null/undefined = default stack. */
+  terminalFont?: string | null;
 }
 
 /** Lazily compute settings file path (not at module load time) */

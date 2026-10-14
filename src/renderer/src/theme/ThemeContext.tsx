@@ -18,7 +18,7 @@ export interface CustomTheme {
   colors: ThemeColors;
 }
 
-const defaultDark: ThemeColors = {
+export const defaultDark: ThemeColors = {
   background: '#1e1e1e',
   foreground: '#d4d4d4',
   tabBackground: '#252526',

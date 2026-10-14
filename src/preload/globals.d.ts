@@ -93,6 +93,7 @@ declare global {
         theme?: string | null;
         externalTerminal?: TerminalPreference;
         integratedShell?: TerminalPreference;
+        terminalFont?: string | null;
       }>;
       /** Merges the given fields into the stored settings. */
       saveSettings: (settings: {
@@ -100,6 +101,7 @@ declare global {
         theme?: string | null;
         externalTerminal?: TerminalPreference;
         integratedShell?: TerminalPreference;
+        terminalFont?: string | null;
       }) => Promise<boolean>;
       applyNativeTheme: (theme: string) => Promise<void>;
       getDefaultSessionDir: () => Promise<string>;

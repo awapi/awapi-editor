@@ -1,10 +1,12 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { ThemeProvider } from './theme/ThemeContext';
+import { render, screen, fireEvent, act } from '@testing-library/react';
+import { ThemeProvider, useTheme } from './theme/ThemeContext';
+import { notifyTerminalFontChanged } from './terminalFonts';
 import TerminalPanel, {
   DEFAULT_TERMINAL_HEIGHT,
   MIN_TERMINAL_HEIGHT,
+  TERMINAL_COLORS,
   clampTerminalHeight,
   isLightColor,
   xtermThemeFor,
@@ -12,10 +14,19 @@ import TerminalPanel, {
 import type { TerminalSessionsController } from './useTerminalSessions';
 
 vi.mock('./TerminalView', () => ({
-  default: (props: { sessionId: number; isActive: boolean; onTogglePanel: () => void; onNewTerminal: () => void }) => (
+  default: (props: {
+    sessionId: number;
+    isActive: boolean;
+    theme: { background?: string };
+    fontFamily?: string;
+    onTogglePanel: () => void;
+    onNewTerminal: () => void;
+  }) => (
     <div
       data-testid={`mock-view-${props.sessionId}`}
       data-active={String(props.isActive)}
+      data-background={props.theme.background}
+      data-font={props.fontFamily}
       onClick={props.onTogglePanel}
       onDoubleClick={props.onNewTerminal}
     />
@@ -135,9 +146,34 @@ describe('TerminalPanel', () => {
     expect(screen.getByTestId('terminal-panel').style.height).toBe(`${DEFAULT_TERMINAL_HEIGHT + 100}px`);
   });
 
+  it('stays dark even when the editor uses the light theme', () => {
+    const SwitchToLight = () => {
+      const { setTheme } = useTheme();
+      return <button data-testid="switch-light" onClick={() => setTheme('light')} />;
+    };
+    render(
+      <ThemeProvider>
+        <SwitchToLight />
+        <TerminalPanel terminals={controller()} cwdForNew={null} />
+      </ThemeProvider>,
+    );
+    fireEvent.click(screen.getByTestId('switch-light'));
+    expect(TERMINAL_COLORS.background).toBe('#1e1e1e');
+    expect(screen.getByTestId('terminal-panel').style.backgroundColor).toBe('rgb(30, 30, 30)');
+    expect(screen.getByTestId('mock-view-1').dataset.background).toBe('#1e1e1e');
+  });
+
   it('restores the stored height', () => {
     localStorage.setItem('awapi.terminalPanelHeight', '180');
     renderPanel();
     expect(screen.getByTestId('terminal-panel').style.height).toBe('180px');
+  });
+
+  it('applies terminal font updates from settings events', () => {
+    renderPanel();
+    act(() => {
+      notifyTerminalFontChanged('MesloLGS NF');
+    });
+    expect(screen.getByTestId('mock-view-1').dataset.font).toContain('"MesloLGS NF"');
   });
 });

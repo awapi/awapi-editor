@@ -1,13 +1,18 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import type { ITheme } from '@xterm/xterm';
 import { ChevronDown, Plus, X } from 'lucide-react';
-import { useTheme, type ThemeColors } from './theme/ThemeContext';
+import { defaultDark, type ThemeColors } from './theme/ThemeContext';
+import { formatTerminalFontFamily, TERMINAL_FONT_CHANGED_EVENT } from './terminalFonts';
 import TerminalView from './TerminalView';
 import type { TerminalSessionsController } from './useTerminalSessions';
 
 export const DEFAULT_TERMINAL_HEIGHT = 240;
 export const MIN_TERMINAL_HEIGHT = 80;
 const HEIGHT_STORAGE_KEY = 'awapi.terminalPanelHeight';
+
+/** The terminal is always dark, regardless of the editor theme. */
+export const TERMINAL_COLORS: ThemeColors = defaultDark;
+const TERMINAL_XTERM_THEME: ITheme = xtermThemeFor(TERMINAL_COLORS);
 
 /** Keeps the panel between the minimum and the window height minus room for the editor. */
 export function clampTerminalHeight(height: number, windowHeight: number): number {
@@ -73,10 +78,32 @@ export interface TerminalPanelProps {
 
 /** Bottom panel hosting the integrated terminal sessions. */
 const TerminalPanel: React.FC<TerminalPanelProps> = ({ terminals, cwdForNew }) => {
-  const { colors } = useTheme();
+  const colors = TERMINAL_COLORS;
   const { sessions, activeId, isOpen, error } = terminals;
   const [height, setHeight] = useState(() => clampTerminalHeight(readStoredHeight(), window.innerHeight));
-  const xtermTheme = useMemo(() => xtermThemeFor(colors), [colors]);
+  const [terminalFont, setTerminalFont] = useState<string | null>(null);
+  const fontFamily = formatTerminalFontFamily(terminalFont);
+
+  useEffect(() => {
+    const w = window as unknown as {
+      electronAPI?: { loadSettings?: () => Promise<{ terminalFont?: string | null }> };
+    };
+    w.electronAPI
+      ?.loadSettings?.()
+      .then(settings => {
+        if (settings?.terminalFont !== undefined) {
+          setTerminalFont(settings.terminalFont ?? null);
+        }
+      })
+      .catch(() => {});
+
+    const onFontChanged = (event: Event) => {
+      const detail = (event as CustomEvent<string | null>).detail;
+      setTerminalFont(detail ?? null);
+    };
+    window.addEventListener(TERMINAL_FONT_CHANGED_EVENT, onFontChanged);
+    return () => window.removeEventListener(TERMINAL_FONT_CHANGED_EVENT, onFontChanged);
+  }, []);
 
   useEffect(() => {
     try {
@@ -238,7 +265,8 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ terminals, cwdForNew }) =
             key={session.id}
             sessionId={session.id}
             isActive={isOpen && session.id === activeId}
-            theme={xtermTheme}
+            theme={TERMINAL_XTERM_THEME}
+            fontFamily={fontFamily}
             subscribe={terminals.subscribe}
             onTogglePanel={() => terminals.togglePanel(cwdForNew)}
             onNewTerminal={() => void terminals.createSession(cwdForNew)}

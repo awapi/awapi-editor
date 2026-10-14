@@ -121,6 +121,24 @@ describe('TerminalView', () => {
     expect(term.options.theme).toEqual({ background: '#fff' });
   });
 
+  it('updates fontFamily without recreating the terminal', () => {
+    const { rerender, subscribe, onTogglePanel, onNewTerminal, api, term } = renderView();
+    rerender(
+      <TerminalView
+        sessionId={3}
+        isActive
+        theme={{ background: '#000' }}
+        fontFamily='"MesloLGS NF", monospace'
+        subscribe={subscribe}
+        onTogglePanel={onTogglePanel}
+        onNewTerminal={onNewTerminal}
+        api={api}
+      />,
+    );
+    expect(terminals).toHaveLength(1);
+    expect(term.options.fontFamily).toBe('"MesloLGS NF", monospace');
+  });
+
   it('cleans up on unmount', () => {
     const { unmount, unsubscribe, term } = renderView();
     unmount();

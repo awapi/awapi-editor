@@ -3,6 +3,7 @@ import { Terminal, type ITheme } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { detectTerminalPlatform, getTerminalKeyAction } from './terminalKeys';
+import { DEFAULT_TERMINAL_FONT_FAMILY } from './terminalFonts';
 import type { TerminalWriter } from './useTerminalSessions';
 
 /** The subset of `window.electronAPI` a terminal view talks to. */
@@ -18,13 +19,12 @@ export interface TerminalViewProps {
   /** Whether this session is the one shown in the panel. */
   isActive: boolean;
   theme: ITheme;
+  fontFamily?: string;
   subscribe: (id: number, writer: TerminalWriter) => () => void;
   onTogglePanel: () => void;
   onNewTerminal: () => void;
   api?: TerminalViewApi;
 }
-
-const FONT_FAMILY = 'Menlo, Monaco, Consolas, "Cascadia Mono", "DejaVu Sans Mono", "Courier New", monospace';
 
 function getDefaultApi(): TerminalViewApi | undefined {
   return (window as unknown as { electronAPI?: TerminalViewApi }).electronAPI;
@@ -35,6 +35,7 @@ const TerminalView: React.FC<TerminalViewProps> = ({
   sessionId,
   isActive,
   theme,
+  fontFamily = DEFAULT_TERMINAL_FONT_FAMILY,
   subscribe,
   onTogglePanel,
   onNewTerminal,
@@ -53,7 +54,7 @@ const TerminalView: React.FC<TerminalViewProps> = ({
     if (!container) return;
     const term = new Terminal({
       cursorBlink: true,
-      fontFamily: FONT_FAMILY,
+      fontFamily,
       fontSize: 13,
       scrollback: 5000,
       theme,
@@ -117,6 +118,18 @@ const TerminalView: React.FC<TerminalViewProps> = ({
   useEffect(() => {
     if (termRef.current) termRef.current.options.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    if (!termRef.current || termRef.current.options.fontFamily === fontFamily) return;
+    termRef.current.options.fontFamily = fontFamily;
+    if (isActive) {
+      try {
+        fitRef.current?.fit();
+      } catch {
+        // Not attached yet.
+      }
+    }
+  }, [fontFamily, isActive]);
 
   useEffect(() => {
     if (!isActive) return;

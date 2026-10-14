@@ -1,6 +1,113 @@
 import React, { useState, useEffect } from 'react';
 import { useTheme } from './theme/ThemeContext';
-import type { ThemeType } from './theme/ThemeContext';
+import type { ThemeType, ThemeColors } from './theme/ThemeContext';
+import type { TerminalChoice, TerminalChoices, TerminalPreference } from '../../shared/terminal';
+
+const CUSTOM_OPTION = '__custom__';
+
+interface TerminalPreferenceFieldProps {
+  label: string;
+  description: string;
+  choices: TerminalChoice[];
+  autoLabel: string | null;
+  value: TerminalPreference;
+  customPlaceholder: string;
+  testId: string;
+  colors: ThemeColors;
+  onChange: (value: TerminalPreference) => void;
+}
+
+/**
+ * Dropdown for a terminal preference: Automatic, a detected choice, or a
+ * custom executable/app typed by the user (saved on blur or Enter).
+ */
+export const TerminalPreferenceField: React.FC<TerminalPreferenceFieldProps> = ({
+  label,
+  description,
+  choices,
+  autoLabel,
+  value,
+  customPlaceholder,
+  testId,
+  colors,
+  onChange,
+}) => {
+  const isCustomValue = !!value && !choices.some(c => c.id === value);
+  const [customMode, setCustomMode] = useState(isCustomValue);
+  const [customText, setCustomText] = useState(isCustomValue ? value ?? '' : '');
+  const selectValue = customMode ? CUSTOM_OPTION : value ?? '';
+
+  const inputStyle: React.CSSProperties = {
+    fontSize: '13px',
+    padding: '5px 8px',
+    borderRadius: '4px',
+    border: `1px solid ${colors.tabHover}`,
+    backgroundColor: colors.tabBackground,
+    color: colors.foreground,
+    width: '100%',
+    boxSizing: 'border-box',
+  };
+
+  const commitCustom = () => {
+    const trimmed = customText.trim();
+    if (trimmed !== (value ?? '')) onChange(trimmed || null);
+  };
+
+  return (
+    <div style={{ marginBottom: '12px' }}>
+      <label htmlFor={testId} style={{ display: 'block', fontSize: '13px', marginBottom: '4px' }}>{label}</label>
+      <select
+        id={testId}
+        data-testid={testId}
+        value={selectValue}
+        onChange={e => {
+          const next = e.target.value;
+          if (next === CUSTOM_OPTION) {
+            setCustomMode(true);
+            return;
+          }
+          setCustomMode(false);
+          onChange(next || null);
+        }}
+        style={inputStyle}
+      >
+        <option value="">{autoLabel ? `Automatic (${autoLabel})` : 'Automatic'}</option>
+        {choices.map(choice => (
+          <option key={choice.id} value={choice.id} title={choice.detail}>
+            {choice.label}
+          </option>
+        ))}
+        <option value={CUSTOM_OPTION}>Custom…</option>
+      </select>
+      {customMode && (
+        <input
+          data-testid={`${testId}-custom`}
+          type="text"
+          value={customText}
+          placeholder={customPlaceholder}
+          onChange={e => setCustomText(e.target.value)}
+          onBlur={commitCustom}
+          onKeyDown={e => {
+            if (e.key === 'Enter') commitCustom();
+          }}
+          style={{ ...inputStyle, marginTop: '6px', fontFamily: 'monospace', fontSize: '12px' }}
+        />
+      )}
+      <p style={{ fontSize: '12px', opacity: 0.6, margin: '4px 0 0' }}>{description}</p>
+    </div>
+  );
+};
+
+function customExternalPlaceholder(platform: string): string {
+  if (platform === 'darwin') return 'App name or path, e.g. Hyper or /Applications/Hyper.app';
+  if (platform === 'win32') return 'Path to a terminal, e.g. C:\\Program Files\\Alacritty\\alacritty.exe';
+  return 'Terminal command or path, e.g. foot';
+}
+
+function customShellPlaceholder(platform: string): string {
+  if (platform === 'win32') return 'Path to a shell, e.g. C:\\msys64\\usr\\bin\\bash.exe';
+  return 'Shell command or path, e.g. /opt/homebrew/bin/nu';
+}
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -12,6 +119,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const [sessionDir, setSessionDir] = useState<string | null>(null);
   const [defaultDir, setDefaultDir] = useState<string>('');
   const [loading, setLoading] = useState(true);
+  const [terminalChoices, setTerminalChoices] = useState<TerminalChoices | null>(null);
+  const [externalTerminal, setExternalTerminal] = useState<TerminalPreference>(null);
+  const [integratedShell, setIntegratedShell] = useState<TerminalPreference>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -20,11 +130,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
 
     setLoading(true);
     Promise.all([
-      w.electronAPI.loadSettings() as Promise<{ sessionDir: string | null }>,
+      w.electronAPI.loadSettings() as Promise<{
+        sessionDir: string | null;
+        externalTerminal?: TerminalPreference;
+        integratedShell?: TerminalPreference;
+      }>,
       w.electronAPI.getDefaultSessionDir() as Promise<string>,
-    ]).then(([settings, defDir]) => {
+      (w.electronAPI.getTerminalChoices?.() as Promise<TerminalChoices> | undefined)?.catch(() => null) ?? null,
+    ]).then(([settings, defDir, choices]) => {
       setSessionDir(settings.sessionDir);
+      setExternalTerminal(settings.externalTerminal ?? null);
+      setIntegratedShell(settings.integratedShell ?? null);
       setDefaultDir(defDir);
+      setTerminalChoices(choices);
       setLoading(false);
     }).catch(() => setLoading(false));
   }, [isOpen]);
@@ -55,6 +173,16 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
     }
   };
 
+  const handleExternalTerminalChange = async (value: TerminalPreference) => {
+    setExternalTerminal(value);
+    await w.electronAPI?.saveSettings({ externalTerminal: value });
+  };
+
+  const handleIntegratedShellChange = async (value: TerminalPreference) => {
+    setIntegratedShell(value);
+    await w.electronAPI?.saveSettings({ integratedShell: value });
+  };
+
   const handleOpenInExplorer = async () => {
     if (!w.electronAPI) return;
     await w.electronAPI.openInExplorer(resolvedDir);
@@ -80,6 +208,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
     minWidth: '480px',
     maxWidth: '640px',
     width: '90%',
+    maxHeight: '90vh',
+    overflowY: 'auto',
     boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
   };
 
@@ -158,6 +288,35 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                 ))}
               </div>
             </div>
+
+            {/* Terminal Section */}
+            {terminalChoices && (
+              <div style={sectionStyle} data-testid="settings-terminal-section">
+                <div style={labelStyle}>Terminal</div>
+                <TerminalPreferenceField
+                  label="Integrated terminal shell"
+                  description="Shell used by the terminal panel (Ctrl+`). Applies to new terminals."
+                  choices={terminalChoices.shells}
+                  autoLabel={terminalChoices.autoShell}
+                  value={integratedShell}
+                  customPlaceholder={customShellPlaceholder(terminalChoices.platform)}
+                  testId="settings-integrated-shell"
+                  colors={colors}
+                  onChange={handleIntegratedShellChange}
+                />
+                <TerminalPreferenceField
+                  label="External terminal"
+                  description={'Application used by \u201cOpen in External Terminal\u201d in the tab menu.'}
+                  choices={terminalChoices.externalTerminals}
+                  autoLabel={terminalChoices.autoExternalTerminal}
+                  value={externalTerminal}
+                  customPlaceholder={customExternalPlaceholder(terminalChoices.platform)}
+                  testId="settings-external-terminal"
+                  colors={colors}
+                  onChange={handleExternalTerminalChange}
+                />
+              </div>
+            )}
 
             {/* Session Storage Section */}
             <div style={sectionStyle}>

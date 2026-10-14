@@ -7,6 +7,7 @@ Thanks for your interest in contributing to Awapi Editor! This document explains
 - **Node.js** (v22 or newer)
 - **Vite**, **Electron** & **React** knowledge
 - [just](https://github.com/casey/just) command runner (optional but recommended)
+- **Linux only:** a C/C++ toolchain and Python 3 (e.g. `sudo apt install build-essential python3`). The integrated terminal's `node-pty` module ships prebuilt binaries for macOS and Windows but is compiled during `pnpm install` on Linux.
 
 ## Getting Started
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Editor, * as MonacoReact from '@monaco-editor/react';
-import { X } from 'lucide-react';
+import { SquareTerminal, X } from 'lucide-react';
 import { useTheme } from './theme/ThemeContext';
 import { useSessionPersistence, loadSession, SessionTab } from './useSessionPersistence';
 import LanguageSelector from './LanguageSelector';
@@ -20,6 +20,9 @@ import {
   toEncodableContent,
 } from '../../shared/encodings';
 import { inferLanguageFromFilename } from './languages';
+import TerminalPanel from './TerminalPanel';
+import { useTerminalSessions } from './useTerminalSessions';
+import { isNewTerminalShortcut, isToggleTerminalShortcut } from './terminalKeys';
 
 /** True when this window was opened via "Pop out to new window" (single-file view). */
 const isPopoutMode = typeof window !== 'undefined' && window.location.hash === '#popout';
@@ -179,6 +182,48 @@ const App: React.FC = () => {
   tabsRef.current = tabs;
   activeTabIdRef.current = activeTabId;
   secondaryTabIdRef.current = secondaryTabId;
+
+  // Integrated terminal (main window only; pop-outs are single-file views).
+  const terminals = useTerminalSessions(isPopoutMode ? null : undefined);
+  const activeFilePath = tabs.find(t => t.id === activeTabId)?.filePath ?? null;
+  const toggleTerminalRef = React.useRef(() => {});
+  const lastTerminalToggleRef = React.useRef(0);
+  toggleTerminalRef.current = () => {
+    if (!terminals.isAvailable) return;
+    // On macOS one Ctrl+` press can reach both the menu accelerator and the
+    // keydown listener; collapse them into a single toggle.
+    const now = Date.now();
+    if (now - lastTerminalToggleRef.current < 150) return;
+    lastTerminalToggleRef.current = now;
+    const tab = tabsRef.current.find(t => t.id === activeTabIdRef.current);
+    terminals.togglePanel(tab?.filePath ?? null);
+  };
+  const newTerminalRef = React.useRef(() => {});
+  const lastNewTerminalRef = React.useRef(0);
+  newTerminalRef.current = () => {
+    if (!terminals.isAvailable) return;
+    // Same double-trigger guard as the toggle (menu accelerator + keydown on macOS).
+    const now = Date.now();
+    if (now - lastNewTerminalRef.current < 150) return;
+    lastNewTerminalRef.current = now;
+    const tab = tabsRef.current.find(t => t.id === activeTabIdRef.current);
+    void terminals.createSession(tab?.filePath ?? null);
+  };
+
+  useEffect(() => {
+    if (isPopoutMode) return;
+    // Capture phase so Ctrl+` works even while Monaco or xterm has focus.
+    const onKeyDown = (e: KeyboardEvent) => {
+      const toggle = isToggleTerminalShortcut(e);
+      if (!toggle && !isNewTerminalShortcut(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (toggle) toggleTerminalRef.current();
+      else newTerminalRef.current();
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, []);
 
   useEffect(() => {
     tabsRef.current = tabs;
@@ -518,6 +563,14 @@ const App: React.FC = () => {
 
       w.electronAPI.onToggleWhitespace?.(() => {
         setShowWhitespace(prev => !prev);
+      });
+
+      w.electronAPI.onToggleTerminal?.(() => {
+        toggleTerminalRef.current();
+      });
+
+      w.electronAPI.onNewTerminal?.(() => {
+        newTerminalRef.current();
       });
 
       w.electronAPI.onToggleSplitView?.(() => {
@@ -964,6 +1017,22 @@ const App: React.FC = () => {
     if (!tab?.filePath) return;
     const w = window as any;
     await w.electronAPI?.showItemInFolder?.(tab.filePath);
+  };
+
+  // Terminals open in the file's folder, or the home folder for unsaved tabs.
+  const handleOpenInExternalTerminal = async (tabId: string) => {
+    setTabContextMenu(null);
+    const tab = tabsRef.current.find(t => t.id === tabId);
+    if (!tab) return;
+    const w = window as any;
+    await w.electronAPI?.openInTerminal?.(tab.filePath ?? null);
+  };
+
+  const handleOpenInIntegratedTerminal = async (tabId: string) => {
+    setTabContextMenu(null);
+    const tab = tabsRef.current.find(t => t.id === tabId);
+    if (!tab) return;
+    await terminals.createSession(tab.filePath ?? null);
   };
 
   const closeRenameModal = () => {
@@ -1974,6 +2043,8 @@ const App: React.FC = () => {
         />
       )}
 
+      {terminals.isAvailable && <TerminalPanel terminals={terminals} cwdForNew={activeFilePath} />}
+
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
       <ShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
       <GoToLineModal
@@ -2140,6 +2211,42 @@ const App: React.FC = () => {
                     title={hasFilePath ? undefined : 'Save the file before revealing in folder'}
                   >
                     Reveal in Finder / Explorer
+                  </div>
+                  {terminals.isAvailable && (
+                  <div
+                    role="menuitem"
+                    data-testid="tab-context-open-in-integrated-terminal"
+                    onClick={() => handleOpenInIntegratedTerminal(tabContextMenu.tabId)}
+                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                    style={{
+                      padding: '7px 16px',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      color: colors.foreground,
+                      backgroundColor: 'transparent',
+                    }}
+                    title={hasFilePath ? undefined : 'Opens in your home folder (the file is not saved yet)'}
+                  >
+                    Open in Integrated Terminal
+                  </div>
+                  )}
+                  <div
+                    role="menuitem"
+                    data-testid="tab-context-open-in-external-terminal"
+                    onClick={() => handleOpenInExternalTerminal(tabContextMenu.tabId)}
+                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                    style={{
+                      padding: '7px 16px',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      color: colors.foreground,
+                      backgroundColor: 'transparent',
+                    }}
+                    title={hasFilePath ? undefined : 'Opens in your home folder (the file is not saved yet)'}
+                  >
+                    Open in External Terminal
                   </div>
                 </>
               );
@@ -2521,6 +2628,28 @@ const App: React.FC = () => {
               tabHover: colors.tabHover,
             }}
           />
+        )}
+        {terminals.isAvailable && (
+          <button
+            data-testid="status-bar-terminal-toggle"
+            aria-label="Toggle terminal"
+            aria-pressed={terminals.isOpen}
+            title="Toggle terminal (Ctrl+`)"
+            onClick={() => toggleTerminalRef.current()}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              marginLeft: '6px',
+              padding: '2px 6px',
+              border: 'none',
+              borderRadius: '3px',
+              background: terminals.isOpen ? colors.tabHover : 'transparent',
+              color: colors.foreground,
+              cursor: 'pointer',
+            }}
+          >
+            <SquareTerminal size={14} />
+          </button>
         )}
         </div>
       </div>

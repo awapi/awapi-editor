@@ -3,12 +3,17 @@ import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard, web
 // Set app name BEFORE any imports that use app.getPath()
 app.name = 'AwapiEditor';
 
-import { dirname, join } from 'path';
+import { dirname, isAbsolute, join } from 'path';
 import * as fs from 'fs';
+import { spawn } from 'child_process';
 import { checkForUpdates } from './updater';
 import { ZOOM_STEP, adjustZoom, resetZoom, clearZoomState } from './zoom';
 import { GO_TO_LINE_ACCELERATOR, SHORTCUTS_REFERENCE_ACCELERATOR } from './shortcuts';
 import { parseReadFileOptions } from './readFileOptions';
+import { openExternalTerminal, resolveTerminalCwd, type ExternalTerminalDeps } from './externalTerminal';
+import { getTerminalChoices, resolveShell } from './terminalDetection';
+import { PtyManager } from './ptyManager';
+import type { PtyCreateOptions } from '../shared/terminal';
 import { createPopoutCloseGuard } from './popoutCloseGuard';
 import { createMainWindowCloseCoordinator } from './mainWindowCloseCoordinator';
 import { WatchRegistry, parseWatchEntries } from './watchRegistry';
@@ -355,6 +360,128 @@ ipcMain.handle('file:showInFolder', async (_, filePath: string) => {
     shell.showItemInFolder(filePath);
   }
 });
+
+// ── Terminals ────────────────────────────────────────────────────────────────
+function terminalDeps(): ExternalTerminalDeps {
+  return {
+    platform: process.platform,
+    env: process.env,
+    spawn,
+    isDirectory: p => {
+      try {
+        return fs.statSync(p).isDirectory();
+      } catch {
+        return false;
+      }
+    },
+    // lstat: Windows app execution aliases (wt.exe) are reparse points that
+    // a following stat cannot open.
+    exists: p => {
+      try {
+        fs.lstatSync(p);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    readFile: p => {
+      try {
+        return fs.readFileSync(p, 'utf-8');
+      } catch {
+        return null;
+      }
+    },
+    realpath: p => {
+      try {
+        return fs.realpathSync(p);
+      } catch {
+        return null;
+      }
+    },
+    dirname,
+    isAbsolute,
+    homeDir: app.getPath('home'),
+  };
+}
+
+/** Terminal apps and shells available on this machine, for Preferences. */
+ipcMain.handle('terminal:getChoices', () => getTerminalChoices(terminalDeps()));
+
+// Opens the external terminal chosen in Preferences (automatic by default) in
+// the folder containing `filePath`, or in the home folder when it is null
+// (unsaved tabs).
+ipcMain.handle('file:openInTerminal', async (event, filePath: string | null) => {
+  const preference = loadAppSettings().externalTerminal ?? null;
+  const result = await openExternalTerminal(filePath, terminalDeps(), preference);
+  if (!result.ok) {
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    const options = { type: 'error' as const, message: 'Could not open a terminal', detail: result.error };
+    if (parent) await dialog.showMessageBox(parent, options);
+    else await dialog.showMessageBox(options);
+  }
+  return result.ok;
+});
+
+// Integrated terminal. Renderer → main: pty:create (invoke), pty:write and
+// pty:resize (fire-and-forget), pty:kill (invoke). Main → renderer:
+// pty:data { id, data } and pty:exit { id, exitCode }.
+const ptyManager = new PtyManager({
+  platform: process.platform,
+  env: process.env,
+  loadSpawnPty: async () => {
+    // Lazy CommonJS require (not import()): resolves inside app.asar.unpacked
+    // in packaged builds, and a broken native build only disables the terminal.
+    const pty = require('node-pty') as typeof import('node-pty');
+    return (file, args, options) => pty.spawn(file, args, options);
+  },
+  resolveShell: () => resolveShell(loadAppSettings().integratedShell ?? null, terminalDeps()),
+  resolveCwd: target => {
+    const deps = terminalDeps();
+    return (target && resolveTerminalCwd(target, deps)) || deps.homeDir;
+  },
+  sendData: (ownerId, payload) => {
+    const wc = webContents.fromId(ownerId);
+    if (wc && !wc.isDestroyed()) wc.send('pty:data', payload);
+  },
+  sendExit: (ownerId, payload) => {
+    const wc = webContents.fromId(ownerId);
+    if (wc && !wc.isDestroyed()) wc.send('pty:exit', payload);
+  },
+});
+
+const ptyOwnersWithCleanup = new Set<number>();
+
+ipcMain.handle('pty:create', (event, options: unknown) => {
+  const owner = event.sender;
+  const ownerId = owner.id;
+  if (!ptyOwnersWithCleanup.has(ownerId)) {
+    ptyOwnersWithCleanup.add(ownerId);
+    // Kill the window's shells when it closes or reloads (the new page
+    // cannot reattach to them).
+    owner.on('did-navigate', () => ptyManager.killAllForOwner(ownerId));
+    owner.once('destroyed', () => {
+      ptyManager.killAllForOwner(ownerId);
+      ptyOwnersWithCleanup.delete(ownerId);
+    });
+  }
+  return ptyManager.create(ownerId, (options ?? undefined) as Partial<PtyCreateOptions> | undefined);
+});
+
+ipcMain.on('pty:write', (event, id: number, data: unknown) => {
+  ptyManager.write(event.sender.id, id, data);
+});
+
+ipcMain.on('pty:resize', (event, id: number, cols: unknown, rows: unknown) => {
+  ptyManager.resize(event.sender.id, id, cols, rows);
+});
+
+ipcMain.handle('pty:kill', (event, id: number) => {
+  ptyManager.kill(event.sender.id, id);
+});
+
+app.on('will-quit', () => ptyManager.killAll());
+
+ipcMain.handle('clipboard:readText', () => clipboard.readText());
 
 ipcMain.handle('clipboard:writeText', async (_, text: string) => {
   if (typeof text === 'string') {
@@ -1035,6 +1162,20 @@ function rebuildAppMenu(): void {
           },
         },
         { type: 'separator' },
+        {
+          label: 'Toggle Terminal',
+          accelerator: 'Ctrl+`',
+          // Windows/Linux: the renderer handles Ctrl+` itself (so it works while
+          // xterm has focus); the accelerator is shown for discoverability only.
+          registerAccelerator: false,
+          click: () => mainWindow?.webContents.send('menu:toggleTerminal'),
+        },
+        {
+          label: 'New Terminal',
+          accelerator: 'Ctrl+Shift+`',
+          registerAccelerator: false,
+          click: () => mainWindow?.webContents.send('menu:newTerminal'),
+        },
         { label: 'Toggle Split View', click: () => mainWindow?.webContents.send('menu:toggleSplitView') },
         { label: 'Toggle Diff View', click: () => mainWindow?.webContents.send('menu:toggleDiffView') },
         { type: 'separator' },

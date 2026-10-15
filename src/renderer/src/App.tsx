@@ -20,6 +20,8 @@ import {
   toEncodableContent,
 } from '../../shared/encodings';
 import { inferLanguageFromFilename } from './languages';
+import { isCsvTab } from './csv';
+import CsvGridEditor from './CsvGridEditor';
 import TerminalPanel from './TerminalPanel';
 import { useTerminalSessions } from './useTerminalSessions';
 import { isNewTerminalShortcut, isToggleTerminalShortcut } from './terminalKeys';
@@ -51,6 +53,8 @@ interface Tab {
   /** Per-tab editor theme override. When undefined, the global theme is used.
    *  Only affects the Monaco editor surface, not the surrounding chrome. */
   themeOverride?: 'light' | 'dark';
+  /** For CSV/TSV tabs: whether to render the spreadsheet grid ('grid', default) or raw text ('text'). */
+  csvViewMode?: 'grid' | 'text';
 }
 
 const App: React.FC = () => {
@@ -1124,6 +1128,13 @@ const App: React.FC = () => {
   const inferredLanguage = activeTab ? inferLanguageFromFilename(activeTab.filePath ?? activeTab.title) : 'plaintext';
   const effectiveLanguage = activeTab?.language ?? inferredLanguage;
   const isLanguageInferred = !activeTab?.language;
+  const isActiveTabCsv = activeTab ? isCsvTab(activeTab.filePath ?? activeTab.title, effectiveLanguage) : false;
+  const activeCsvViewMode = activeTab?.csvViewMode ?? 'grid';
+
+  const setActiveTabCsvViewMode = (mode: 'grid' | 'text') => {
+    if (!activeTabId) return;
+    setTabs(prev => prev.map(t => (t.id === activeTabId ? { ...t, csvViewMode: mode } : t)));
+  };
 
   const secondaryInferredLanguage = secondaryTab
     ? inferLanguageFromFilename(secondaryTab.filePath ?? secondaryTab.title)
@@ -2001,27 +2012,79 @@ const App: React.FC = () => {
                 />
               ) : null}
             </div>
+          ) : isActiveTabCsv && activeCsvViewMode === 'grid' ? (
+            <CsvGridEditor
+              content={activeTab.content}
+              filename={activeTab.filePath ?? activeTab.title}
+              eol={activeTab.eol ?? 'LF'}
+              onChange={(nextContent) => updateTabContent(activeTab.id, nextContent)}
+              onSwitchToTextView={() => setActiveTabCsvViewMode('text')}
+              onCursorChange={(row, col) => setCursorPosition({ line: row, column: col })}
+              colors={{
+                ...colors,
+                background: surfaceBgFor(activeTab.themeOverride),
+                foreground: surfaceFgFor(activeTab.themeOverride),
+              }}
+              themeMode={(activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark'))}
+            />
           ) : (
-          <Editor
-            height="100%"
-            theme={(activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark')) === 'light' ? 'light' : 'vs-dark'} /* Per-tab override falls back to global theme */
-            path={activeTab.title} /* Monaco uses path to infer language (e.g. file.json -> json) */
-            language={effectiveLanguage}
-            value={activeTab.content}
-            onChange={handleEditorChange}
-            onMount={handlePrimaryEditorMount}
-            options={{
-              minimap: { enabled: true },
-              fontSize: 14,
-              wordWrap: wordWrap ? 'on' : 'off',
-              renderWhitespace: showWhitespace ? 'all' : 'none',
-              renderControlCharacters: showWhitespace,
-              formatOnType: true,
-              formatOnPaste: true,
-              padding: { top: 6 },
-              lineNumbersMinChars: 6,
-            }}
-          />
+            <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
+              {isActiveTabCsv && (
+                <div
+                  data-testid="csv-raw-text-banner"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '4px 10px',
+                    backgroundColor: colors.tabBackground,
+                    borderBottom: `1px solid ${colors.tabHover}`,
+                    fontSize: '12px',
+                    flexShrink: 0,
+                  }}
+                >
+                  <span style={{ opacity: 0.8 }}>Viewing CSV as raw text</span>
+                  <button
+                    data-testid="csv-switch-to-grid-button"
+                    onClick={() => setActiveTabCsvViewMode('grid')}
+                    style={{
+                      padding: '2px 9px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      borderRadius: '4px',
+                      border: `1px solid ${colors.tabBorder}`,
+                      backgroundColor: colors.background,
+                      color: colors.foreground,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Grid View
+                  </button>
+                </div>
+              )}
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <Editor
+                  height="100%"
+                  theme={(activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark')) === 'light' ? 'light' : 'vs-dark'} /* Per-tab override falls back to global theme */
+                  path={activeTab.title} /* Monaco uses path to infer language (e.g. file.json -> json) */
+                  language={effectiveLanguage === 'csv' ? 'plaintext' : effectiveLanguage}
+                  value={activeTab.content}
+                  onChange={handleEditorChange}
+                  onMount={handlePrimaryEditorMount}
+                  options={{
+                    minimap: { enabled: true },
+                    fontSize: 14,
+                    wordWrap: wordWrap ? 'on' : 'off',
+                    renderWhitespace: showWhitespace ? 'all' : 'none',
+                    renderControlCharacters: showWhitespace,
+                    formatOnType: true,
+                    formatOnPaste: true,
+                    padding: { top: 6 },
+                    lineNumbersMinChars: 6,
+                  }}
+                />
+              </div>
+            </div>
           )
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#666', gap: '6px' }}>

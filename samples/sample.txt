@@ -1,0 +1,24 @@
+Awapi Editor — Sample Plain Text Document
+=========================================
+
+Overview
+--------
+Awapi Editor is a fast, lightweight, cross-platform text and code editor built with
+Electron, React, TypeScript, and Monaco Editor.
+
+Quick Tips & Shortcuts
+----------------------
+- New Tab:                Ctrl+N (Cmd+N on macOS)
+- Open File:              Ctrl+O (Cmd+O on macOS)
+- Save File:              Ctrl+S (Cmd+S on macOS)
+- Find in All Open Tabs:  Ctrl+Shift+F (Cmd+Shift+F on macOS)
+- Go to Line:             Ctrl+G
+- Toggle Terminal:        Ctrl+`
+- Reopen Closed Tab:      Ctrl+Shift+T
+
+Sample Notes
+------------
+1. You can switch between Split View and Diff View using the top-right toolbar icons.
+2. CSV and TSV files automatically open in an interactive Grid View with sorting,
+   filtering, and delimiter selection.
+3. Encoding and line endings (LF / CRLF) can be changed from the bottom status bar.

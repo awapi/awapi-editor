@@ -2165,4 +2165,44 @@ describe('Editor Core Tests', () => {
       expect(select().value).toBe('tab-1');
     });
   });
+
+  describe('CSV Grid Editor integration', () => {
+    it('opens .csv tabs in the interactive grid editor and toggles between Grid View and Raw Text', async () => {
+      const api = (window as any).electronAPI;
+      api.loadSession.mockResolvedValue({
+        activeTabId: 'csv-1',
+        tabs: [
+          {
+            id: 'csv-1',
+            title: 'users.csv',
+            filePath: '/tmp/users.csv',
+            content: 'Name,Role\nAlice,Admin\nBob,User',
+            isDirty: false,
+            eol: 'LF',
+          },
+        ],
+      });
+      api.readFile = vi.fn().mockResolvedValue({
+        filePath: '/tmp/users.csv',
+        content: 'Name,Role\nAlice,Admin\nBob,User',
+        eol: 'LF',
+        encoding: 'utf-8',
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => expect(screen.getByTestId('csv-grid-editor')).toBeTruthy());
+
+      // Edit cell in grid and verify tab becomes dirty
+      fireEvent.change(screen.getByTestId('csv-cell-1-1'), { target: { value: 'Owner' } });
+      expect(screen.getByText(/users\.csv \*/)).toBeTruthy();
+
+      // Switch to Raw Text view and back to Grid View
+      fireEvent.click(screen.getByTestId('csv-switch-to-text-button'));
+      expect(screen.getByTestId('csv-raw-text-banner')).toBeTruthy();
+
+      fireEvent.click(screen.getByTestId('csv-switch-to-grid-button'));
+      expect(screen.getByTestId('csv-grid-editor')).toBeTruthy();
+      expect((screen.getByTestId('csv-cell-1-1') as HTMLInputElement).value).toBe('Owner');
+    });
+  });
 });

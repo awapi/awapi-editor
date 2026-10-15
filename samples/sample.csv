@@ -1,0 +1,11 @@
+EmployeeId,FullName,Department,Role,Location,Salary,IsActive,HireDate
+101,Alice Johnson,Engineering,Staff Engineer,Seattle,165000,true,2021-03-15
+102,Bob Smith,Product,Product Manager,Austin,142000,true,2022-06-01
+103,"Chen, Wei",Engineering,Senior Frontend Developer,San Francisco,158000,true,2020-11-20
+104,Diana Prince,Design,Lead UX Designer,New York,138000,true,2023-01-10
+105,Evan Wright,Engineering,DevOps Engineer,Remote,149000,false,2019-08-05
+106,Fatima Al-Mansoor,Data Science,Machine Learning Engineer,Boston,172000,true,2022-09-12
+107,Gabriel Santos,Support,Customer Success Lead,Chicago,98000,true,2023-04-24
+108,Hannah Abbott,Marketing,Growth Specialist,Denver,112000,true,2024-02-01
+109,Isaac Newton,Research,"Principal Scientist, Physics",Cambridge,185000,true,2018-05-19
+110,Julia Roberts,Sales,Enterprise Account Executive,Atlanta,135000,false,2021-10-30

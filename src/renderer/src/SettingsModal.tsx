@@ -110,7 +110,7 @@ function customShellPlaceholder(platform: string): string {
   return 'Shell command or path, e.g. /opt/homebrew/bin/nu';
 }
 
-export type SettingsTabId = 'appearance' | 'terminal' | 'backup';
+export type SettingsTabId = 'general' | 'appearance' | 'terminal';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -118,7 +118,7 @@ interface SettingsModalProps {
   initialTab?: SettingsTabId;
 }
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab = 'appearance' }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab = 'general' }) => {
   const { colors, currentTheme, setTheme } = useTheme();
   const [activeTab, setActiveTab] = useState<SettingsTabId>(initialTab);
   const [sessionDir, setSessionDir] = useState<string | null>(null);
@@ -129,6 +129,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialT
   const [integratedShell, setIntegratedShell] = useState<TerminalPreference>(null);
   const [terminalFont, setTerminalFont] = useState<string | null>(null);
   const [consoleFonts, setConsoleFonts] = useState<string[]>([]);
+  const [contextMenuSupported, setContextMenuSupported] = useState(false);
+  const [contextMenuEnabled, setContextMenuEnabled] = useState(false);
+  const [contextMenuBusy, setContextMenuBusy] = useState(false);
+  const [contextMenuError, setContextMenuError] = useState<string | null>(null);
+  const [cliCommandSupported, setCliCommandSupported] = useState(false);
+  const [cliCommandEnabled, setCliCommandEnabled] = useState(false);
+  const [cliCommandPath, setCliCommandPath] = useState<string | null>(null);
+  const [cliCommandBusy, setCliCommandBusy] = useState(false);
+  const [cliCommandError, setCliCommandError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -137,6 +146,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialT
     if (!w.electronAPI) return;
 
     setLoading(true);
+    setContextMenuError(null);
+    setCliCommandError(null);
     Promise.all([
       w.electronAPI.loadSettings() as Promise<{
         sessionDir: string | null;
@@ -147,7 +158,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialT
       w.electronAPI.getDefaultSessionDir() as Promise<string>,
       (w.electronAPI.getTerminalChoices?.() as Promise<TerminalChoices> | undefined)?.catch(() => null) ?? null,
       detectConsoleFonts().catch(() => [] as string[]),
-    ]).then(([settings, defDir, choices, fonts]) => {
+      (w.electronAPI.getContextMenuStatus?.() as Promise<{ supported: boolean; enabled: boolean }> | undefined)?.catch(
+        () => null,
+      ) ?? null,
+      (
+        w.electronAPI.getCliCommandStatus?.() as
+          | Promise<{ supported: boolean; enabled: boolean; commandPath: string | null }>
+          | undefined
+      )?.catch(() => null) ?? null,
+    ]).then(([settings, defDir, choices, fonts, ctxMenu, cliStatus]) => {
       setSessionDir(settings.sessionDir);
       setExternalTerminal(settings.externalTerminal ?? null);
       setIntegratedShell(settings.integratedShell ?? null);
@@ -155,6 +174,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialT
       setDefaultDir(defDir);
       setTerminalChoices(choices);
       setConsoleFonts(fonts);
+      setContextMenuSupported(Boolean(ctxMenu?.supported));
+      setContextMenuEnabled(Boolean(ctxMenu?.enabled));
+      setCliCommandSupported(Boolean(cliStatus?.supported));
+      setCliCommandEnabled(Boolean(cliStatus?.enabled));
+      setCliCommandPath(cliStatus?.commandPath ?? null);
       setLoading(false);
     }).catch(() => setLoading(false));
   }, [isOpen, initialTab]);
@@ -209,6 +233,43 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialT
   const handleOpenInExplorer = async () => {
     if (!w.electronAPI) return;
     await w.electronAPI.openInExplorer(resolvedDir);
+  };
+
+  const handleToggleContextMenu = async (nextEnabled: boolean) => {
+    if (!w.electronAPI?.setContextMenuEnabled || contextMenuBusy) return;
+    setContextMenuBusy(true);
+    setContextMenuError(null);
+    try {
+      const res = await w.electronAPI.setContextMenuEnabled(nextEnabled);
+      setContextMenuEnabled(Boolean(res.enabled));
+      if (!res.ok) {
+        setContextMenuError(res.error || 'Could not update Windows Explorer context menu.');
+      }
+    } catch (err) {
+      setContextMenuError(err instanceof Error ? err.message : 'Could not update Windows Explorer context menu.');
+    } finally {
+      setContextMenuBusy(false);
+    }
+  };
+
+  const handleToggleCliCommand = async (nextEnabled: boolean) => {
+    if (!w.electronAPI?.setCliCommandEnabled || cliCommandBusy) return;
+    setCliCommandBusy(true);
+    setCliCommandError(null);
+    try {
+      const res = await w.electronAPI.setCliCommandEnabled(nextEnabled);
+      setCliCommandEnabled(Boolean(res.enabled));
+      if (res.commandPath !== undefined) {
+        setCliCommandPath(res.commandPath);
+      }
+      if (!res.ok) {
+        setCliCommandError(res.error || 'Could not update the "awed" CLI command.');
+      }
+    } catch (err) {
+      setCliCommandError(err instanceof Error ? err.message : 'Could not update the "awed" CLI command.');
+    } finally {
+      setCliCommandBusy(false);
+    }
   };
 
   // Overlay
@@ -309,13 +370,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialT
   ];
 
   const tabs: { id: SettingsTabId; label: string }[] = [
+    { id: 'general', label: 'General' },
     { id: 'appearance', label: 'Appearance' },
     ...(terminalChoices ? [{ id: 'terminal' as const, label: 'Terminal' }] : []),
-    { id: 'backup', label: 'Backup' },
   ];
 
   const resolvedActiveTab: SettingsTabId =
-    activeTab === 'terminal' && !terminalChoices ? 'appearance' : activeTab;
+    activeTab === 'terminal' && !terminalChoices ? 'general' : activeTab;
 
   return (
     <div style={overlayStyle} data-testid="settings-overlay">
@@ -373,6 +434,123 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialT
 
             {/* Tab Content (fixed height so switching tabs doesn't resize the modal) */}
             <div style={tabContentStyle} data-testid="settings-tab-content">
+            {/* General Tab */}
+            {resolvedActiveTab === 'general' && (
+              <div
+                role="tabpanel"
+                id="settings-panel-general"
+                aria-labelledby="settings-tab-general"
+                data-testid="settings-general-section"
+              >
+                <div style={groupCardStyle} data-testid="settings-group-backup-folder">
+                  <div style={labelStyle}>Backup Folder (Unsaved Files)</div>
+                  <p style={{ fontSize: '12px', opacity: 0.7, margin: '0 0 10px' }}>
+                    Unsaved files are backed up here in individual files for easy recovery. Open tabs and session state are restored on next launch.
+                    {sessionDir === null && (
+                      <span style={{ marginLeft: 4, opacity: 0.55 }}>(default: ~/Documents/AwapiEditor/Backups)</span>
+                    )}
+                  </p>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: sessionDir !== null ? '8px' : '0' }}>
+                    <span
+                      title={resolvedDir}
+                      style={{ ...pathBoxStyle, backgroundColor: colors.background }}
+                      data-testid="session-dir-path"
+                    >
+                      {resolvedDir}
+                    </span>
+                    <button style={btnStyle()} onClick={handleChangeDir} data-testid="change-dir-btn">
+                      Change…
+                    </button>
+                    <button style={btnStyle()} onClick={handleOpenInExplorer} data-testid="open-explorer-btn">
+                      Open
+                    </button>
+                  </div>
+                  {sessionDir !== null && (
+                    <button
+                      style={{ ...btnStyle(), fontSize: '12px', padding: '4px 10px' }}
+                      onClick={handleResetDefault}
+                      data-testid="reset-default-btn"
+                    >
+                      Reset to Default
+                    </button>
+                  )}
+                </div>
+
+                {contextMenuSupported && (
+                  <div style={groupCardStyle} data-testid="settings-group-context-menu">
+                    <div style={labelStyle}>Windows Explorer</div>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        fontSize: '13px',
+                        cursor: contextMenuBusy ? 'default' : 'pointer',
+                        userSelect: 'none',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        data-testid="settings-context-menu-checkbox"
+                        checked={contextMenuEnabled}
+                        disabled={contextMenuBusy}
+                        onChange={e => void handleToggleContextMenu(e.target.checked)}
+                      />
+                      <span>Show &ldquo;Edit with AwapiEditor&rdquo; in Windows Explorer context menu</span>
+                    </label>
+                    <p style={{ fontSize: '12px', opacity: 0.6, margin: '6px 0 0' }}>
+                      Adds an &ldquo;Edit with AwapiEditor&rdquo; item when right-clicking any file in File Explorer.
+                    </p>
+                    {contextMenuError && (
+                      <p
+                        data-testid="settings-context-menu-error"
+                        style={{ fontSize: '12px', color: '#f87171', margin: '6px 0 0' }}
+                      >
+                        {contextMenuError}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {cliCommandSupported && (
+                  <div style={groupCardStyle} data-testid="settings-group-cli-command">
+                    <div style={labelStyle}>Command Line (CLI)</div>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        fontSize: '13px',
+                        cursor: cliCommandBusy ? 'default' : 'pointer',
+                        userSelect: 'none',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        data-testid="settings-cli-command-checkbox"
+                        checked={cliCommandEnabled}
+                        disabled={cliCommandBusy}
+                        onChange={e => void handleToggleCliCommand(e.target.checked)}
+                      />
+                      <span>Enable &ldquo;awed&rdquo; command in terminal</span>
+                    </label>
+                    <p style={{ fontSize: '12px', opacity: 0.6, margin: '6px 0 0' }}>
+                      Open files from any terminal with <code style={{ fontFamily: 'monospace' }}>awed filename.txt</code>.
+                      {cliCommandPath ? ` Installed at ${cliCommandPath}.` : ''}
+                    </p>
+                    {cliCommandError && (
+                      <p
+                        data-testid="settings-cli-command-error"
+                        style={{ fontSize: '12px', color: '#f87171', margin: '6px 0 0' }}
+                      >
+                        {cliCommandError}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Appearance Tab */}
             {resolvedActiveTab === 'appearance' && (
               <div
@@ -466,50 +644,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialT
                       onChange={handleExternalTerminalChange}
                     />
                   </div>
-                </div>
-              </div>
-            )}
-
-            {/* Backup Tab */}
-            {resolvedActiveTab === 'backup' && (
-              <div
-                role="tabpanel"
-                id="settings-panel-backup"
-                aria-labelledby="settings-tab-backup"
-                data-testid="settings-backup-section"
-              >
-                <div style={groupCardStyle} data-testid="settings-group-backup-folder">
-                  <div style={labelStyle}>Backup Folder (Unsaved Files)</div>
-                  <p style={{ fontSize: '12px', opacity: 0.7, margin: '0 0 10px' }}>
-                    Unsaved files are backed up here in individual files for easy recovery. Open tabs and session state are restored on next launch.
-                    {sessionDir === null && (
-                      <span style={{ marginLeft: 4, opacity: 0.55 }}>(default: ~/Documents/AwapiEditor/Backups)</span>
-                    )}
-                  </p>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: sessionDir !== null ? '8px' : '0' }}>
-                    <span
-                      title={resolvedDir}
-                      style={{ ...pathBoxStyle, backgroundColor: colors.background }}
-                      data-testid="session-dir-path"
-                    >
-                      {resolvedDir}
-                    </span>
-                    <button style={btnStyle()} onClick={handleChangeDir} data-testid="change-dir-btn">
-                      Change…
-                    </button>
-                    <button style={btnStyle()} onClick={handleOpenInExplorer} data-testid="open-explorer-btn">
-                      Open
-                    </button>
-                  </div>
-                  {sessionDir !== null && (
-                    <button
-                      style={{ ...btnStyle(), fontSize: '12px', padding: '4px 10px' }}
-                      onClick={handleResetDefault}
-                      data-testid="reset-default-btn"
-                    >
-                      Reset to Default
-                    </button>
-                  )}
                 </div>
               </div>
             )}

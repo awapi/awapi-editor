@@ -35,18 +35,18 @@ describe('SettingsModal', () => {
     expect(screen.queryByTestId('settings-modal')).toBeNull();
   });
 
-  it('renders the modal when open and defaults to the Appearance tab', async () => {
+  it('renders the modal when open and defaults to the General tab', async () => {
     renderModal(true);
     await waitFor(() => expect(screen.getByTestId('settings-modal')).toBeDefined());
     expect(screen.getByText('Preferences')).toBeDefined();
     await waitFor(() => expect(screen.getByTestId('settings-tabs')).toBeDefined());
-    expect(screen.getByTestId('settings-tab-appearance').getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByTestId('settings-tab-backup').getAttribute('aria-selected')).toBe('false');
-    expect(screen.getByTestId('settings-appearance-section')).toBeDefined();
-    expect(screen.getByTestId('settings-group-theme')).toBeDefined();
+    expect(screen.getByTestId('settings-tab-general').getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByTestId('settings-tab-appearance').getAttribute('aria-selected')).toBe('false');
+    expect(screen.getByTestId('settings-general-section')).toBeDefined();
+    expect(screen.getByTestId('settings-group-backup-folder')).toBeDefined();
   });
 
-  it('switches between Appearance, Terminal, and Backup tabs with grouped sections', async () => {
+  it('switches between General, Appearance, and Terminal tabs with grouped sections', async () => {
     mockElectronAPI.getTerminalChoices = vi.fn().mockResolvedValue({
       platform: 'win32',
       externalTerminals: [],
@@ -55,12 +55,20 @@ describe('SettingsModal', () => {
       autoShell: null,
     });
     renderModal(true);
-    await waitFor(() => expect(screen.getByTestId('settings-tab-appearance')).toBeDefined());
+    await waitFor(() => expect(screen.getByTestId('settings-tab-general')).toBeDefined());
 
-    // Initially on Appearance tab
-    expect(screen.getByTestId('settings-appearance-section')).toBeDefined();
+    // Initially on General tab (first tab)
+    expect(screen.getByTestId('settings-general-section')).toBeDefined();
+    expect(screen.getByTestId('settings-group-backup-folder')).toBeDefined();
+    expect(screen.queryByTestId('settings-appearance-section')).toBeNull();
     expect(screen.queryByTestId('settings-terminal-section')).toBeNull();
-    expect(screen.queryByTestId('settings-backup-section')).toBeNull();
+
+    // Switch to Appearance tab
+    fireEvent.click(screen.getByTestId('settings-tab-appearance'));
+    expect(screen.getByTestId('settings-tab-appearance').getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByTestId('settings-appearance-section')).toBeDefined();
+    expect(screen.getByTestId('settings-group-theme')).toBeDefined();
+    expect(screen.queryByTestId('settings-general-section')).toBeNull();
 
     // Switch to Terminal tab
     fireEvent.click(screen.getByTestId('settings-tab-terminal'));
@@ -69,27 +77,18 @@ describe('SettingsModal', () => {
     expect(screen.getByTestId('settings-group-integrated-terminal')).toBeDefined();
     expect(screen.getByTestId('settings-group-external-terminal')).toBeDefined();
     expect(screen.queryByTestId('settings-appearance-section')).toBeNull();
-
-    // Switch to Backup tab
-    fireEvent.click(screen.getByTestId('settings-tab-backup'));
-    expect(screen.getByTestId('settings-tab-backup').getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByTestId('settings-backup-section')).toBeDefined();
-    expect(screen.getByTestId('settings-group-backup-folder')).toBeDefined();
-    expect(screen.queryByTestId('settings-terminal-section')).toBeNull();
   });
 
   it('shows the default session directory when no custom dir is set', async () => {
     renderModal(true);
-    await waitFor(() => screen.getByTestId('settings-tab-backup'));
-    fireEvent.click(screen.getByTestId('settings-tab-backup'));
+    await waitFor(() => screen.getByTestId('session-dir-path'));
     expect(screen.getByTestId('session-dir-path').textContent).toBe('/home/user/.config/awapi-editor');
   });
 
   it('shows a custom session directory when one is configured', async () => {
     mockElectronAPI.loadSettings.mockResolvedValue({ sessionDir: '/custom/sessions' });
     renderModal(true);
-    await waitFor(() => screen.getByTestId('settings-tab-backup'));
-    fireEvent.click(screen.getByTestId('settings-tab-backup'));
+    await waitFor(() => screen.getByTestId('session-dir-path'));
     expect(screen.getByTestId('session-dir-path').textContent).toBe('/custom/sessions');
   });
 
@@ -120,8 +119,7 @@ describe('SettingsModal', () => {
   it('opens dir dialog and saves new path on Change click', async () => {
     mockElectronAPI.openDirDialog.mockResolvedValue('/new/session/path');
     renderModal(true);
-    await waitFor(() => screen.getByTestId('settings-tab-backup'));
-    fireEvent.click(screen.getByTestId('settings-tab-backup'));
+    await waitFor(() => screen.getByTestId('change-dir-btn'));
     fireEvent.click(screen.getByTestId('change-dir-btn'));
     await waitFor(() => expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ sessionDir: '/new/session/path', theme: 'dark' }));
     expect(screen.getByTestId('session-dir-path').textContent).toBe('/new/session/path');
@@ -130,8 +128,7 @@ describe('SettingsModal', () => {
   it('does not save if dir dialog is cancelled', async () => {
     mockElectronAPI.openDirDialog.mockResolvedValue(null);
     renderModal(true);
-    await waitFor(() => screen.getByTestId('settings-tab-backup'));
-    fireEvent.click(screen.getByTestId('settings-tab-backup'));
+    await waitFor(() => screen.getByTestId('change-dir-btn'));
     fireEvent.click(screen.getByTestId('change-dir-btn'));
     await waitFor(() => expect(mockElectronAPI.openDirDialog).toHaveBeenCalled());
     expect(mockElectronAPI.saveSettings).not.toHaveBeenCalled();
@@ -139,8 +136,7 @@ describe('SettingsModal', () => {
 
   it('calls openInExplorer with the resolved path on Open click', async () => {
     renderModal(true);
-    await waitFor(() => screen.getByTestId('settings-tab-backup'));
-    fireEvent.click(screen.getByTestId('settings-tab-backup'));
+    await waitFor(() => screen.getByTestId('open-explorer-btn'));
     fireEvent.click(screen.getByTestId('open-explorer-btn'));
     await waitFor(() =>
       expect(mockElectronAPI.openInExplorer).toHaveBeenCalledWith('/home/user/.config/awapi-editor')
@@ -150,8 +146,7 @@ describe('SettingsModal', () => {
   it('shows Reset to Default button only when a custom dir is set', async () => {
     // No custom dir – reset button should not appear
     const { unmount } = renderModal(true);
-    await waitFor(() => screen.getByTestId('settings-tab-backup'));
-    fireEvent.click(screen.getByTestId('settings-tab-backup'));
+    await waitFor(() => screen.getByTestId('session-dir-path'));
     expect(screen.getByTestId('session-dir-path')).toBeDefined();
     expect(screen.queryByTestId('reset-default-btn')).toBeNull();
     unmount();
@@ -159,16 +154,14 @@ describe('SettingsModal', () => {
     // Now with custom dir
     mockElectronAPI.loadSettings.mockResolvedValue({ sessionDir: '/custom/path' });
     renderModal(true);
-    await waitFor(() => screen.getByTestId('settings-tab-backup'));
-    fireEvent.click(screen.getByTestId('settings-tab-backup'));
+    await waitFor(() => screen.getByTestId('reset-default-btn'));
     expect(screen.getByTestId('reset-default-btn')).toBeDefined();
   });
 
   it('resets to default dir and saves null sessionDir', async () => {
     mockElectronAPI.loadSettings.mockResolvedValue({ sessionDir: '/custom/path', theme: 'dark' });
     renderModal(true);
-    await waitFor(() => screen.getByTestId('settings-tab-backup'));
-    fireEvent.click(screen.getByTestId('settings-tab-backup'));
+    await waitFor(() => screen.getByTestId('reset-default-btn'));
     fireEvent.click(screen.getByTestId('reset-default-btn'));
     await waitFor(() => expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ sessionDir: null, theme: 'dark' }));
     await waitFor(() =>
@@ -178,21 +171,24 @@ describe('SettingsModal', () => {
 
   it('renders both Dark and Light theme buttons', async () => {
     renderModal(true);
-    await waitFor(() => screen.getByTestId('theme-btn-dark'));
+    await waitFor(() => screen.getByTestId('settings-tab-appearance'));
+    fireEvent.click(screen.getByTestId('settings-tab-appearance'));
     expect(screen.getByTestId('theme-btn-dark')).toBeDefined();
     expect(screen.getByTestId('theme-btn-light')).toBeDefined();
   });
 
   it('Dark button is pressed by default (default theme is dark)', async () => {
     renderModal(true);
-    await waitFor(() => screen.getByTestId('theme-btn-dark'));
+    await waitFor(() => screen.getByTestId('settings-tab-appearance'));
+    fireEvent.click(screen.getByTestId('settings-tab-appearance'));
     expect(screen.getByTestId('theme-btn-dark').getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByTestId('theme-btn-light').getAttribute('aria-pressed')).toBe('false');
   });
 
   it('switches to Light theme when Light button is clicked', async () => {
     renderModal(true);
-    await waitFor(() => screen.getByTestId('theme-btn-light'));
+    await waitFor(() => screen.getByTestId('settings-tab-appearance'));
+    fireEvent.click(screen.getByTestId('settings-tab-appearance'));
     fireEvent.click(screen.getByTestId('theme-btn-light'));
     expect(screen.getByTestId('theme-btn-light').getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByTestId('theme-btn-dark').getAttribute('aria-pressed')).toBe('false');
@@ -200,7 +196,8 @@ describe('SettingsModal', () => {
 
   it('persists selected theme to settings when a theme button is clicked', async () => {
     renderModal(true);
-    await waitFor(() => screen.getByTestId('theme-btn-light'));
+    await waitFor(() => screen.getByTestId('settings-tab-appearance'));
+    fireEvent.click(screen.getByTestId('settings-tab-appearance'));
     fireEvent.click(screen.getByTestId('theme-btn-light'));
     await waitFor(() =>
       expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ sessionDir: null, theme: 'light' })
@@ -323,6 +320,132 @@ describe('SettingsModal', () => {
       await waitFor(() =>
         expect(mockElectronAPI.saveSettings).toHaveBeenCalledWith({ terminalFont: null }),
       );
+    });
+  });
+
+  describe('Windows Explorer Context Menu section', () => {
+    it('is hidden when getContextMenuStatus is absent or returns supported: false', async () => {
+      mockElectronAPI.getContextMenuStatus = vi.fn().mockResolvedValue({ supported: false, enabled: false });
+      renderModal(true);
+      await waitFor(() => screen.getByTestId('settings-general-section'));
+      expect(screen.queryByTestId('settings-group-context-menu')).toBeNull();
+    });
+
+    it('renders checkbox reflecting current registry status when supported', async () => {
+      mockElectronAPI.getContextMenuStatus = vi.fn().mockResolvedValue({ supported: true, enabled: true });
+      renderModal(true);
+      await waitFor(() => screen.getByTestId('settings-group-context-menu'));
+      const checkbox = screen.getByTestId('settings-context-menu-checkbox') as HTMLInputElement;
+      expect(checkbox.checked).toBe(true);
+    });
+
+    it('toggles context menu registration via setContextMenuEnabled', async () => {
+      mockElectronAPI.getContextMenuStatus = vi.fn().mockResolvedValue({ supported: true, enabled: false });
+      mockElectronAPI.setContextMenuEnabled = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, enabled: true })
+        .mockResolvedValueOnce({ ok: true, enabled: false });
+
+      renderModal(true);
+      const checkbox = (await screen.findByTestId('settings-context-menu-checkbox')) as HTMLInputElement;
+      expect(checkbox.checked).toBe(false);
+
+      fireEvent.click(checkbox);
+      await waitFor(() => expect(mockElectronAPI.setContextMenuEnabled).toHaveBeenCalledWith(true));
+      expect(checkbox.checked).toBe(true);
+
+      fireEvent.click(checkbox);
+      await waitFor(() => expect(mockElectronAPI.setContextMenuEnabled).toHaveBeenCalledWith(false));
+      expect(checkbox.checked).toBe(false);
+    });
+
+    it('displays an error message when setContextMenuEnabled fails', async () => {
+      mockElectronAPI.getContextMenuStatus = vi.fn().mockResolvedValue({ supported: true, enabled: false });
+      mockElectronAPI.setContextMenuEnabled = vi.fn().mockResolvedValue({
+        ok: false,
+        enabled: false,
+        error: 'Access is denied.',
+      });
+
+      renderModal(true);
+      const checkbox = (await screen.findByTestId('settings-context-menu-checkbox')) as HTMLInputElement;
+      fireEvent.click(checkbox);
+
+      await waitFor(() => expect(screen.getByTestId('settings-context-menu-error').textContent).toBe('Access is denied.'));
+      expect(checkbox.checked).toBe(false);
+    });
+  });
+
+  describe('CLI Command ("awed") section', () => {
+    it('is hidden when getCliCommandStatus is absent or returns supported: false', async () => {
+      mockElectronAPI.getCliCommandStatus = vi.fn().mockResolvedValue({
+        supported: false,
+        enabled: false,
+        commandPath: null,
+      });
+      renderModal(true);
+      await waitFor(() => screen.getByTestId('settings-general-section'));
+      expect(screen.queryByTestId('settings-group-cli-command')).toBeNull();
+    });
+
+    it('renders checkbox and install path when supported', async () => {
+      mockElectronAPI.getCliCommandStatus = vi.fn().mockResolvedValue({
+        supported: true,
+        enabled: true,
+        commandPath: 'C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\awed.cmd',
+      });
+      renderModal(true);
+      await waitFor(() => screen.getByTestId('settings-group-cli-command'));
+      const checkbox = screen.getByTestId('settings-cli-command-checkbox') as HTMLInputElement;
+      expect(checkbox.checked).toBe(true);
+      expect(screen.getByTestId('settings-group-cli-command').textContent).toContain('awed.cmd');
+    });
+
+    it('toggles CLI command registration via setCliCommandEnabled', async () => {
+      mockElectronAPI.getCliCommandStatus = vi.fn().mockResolvedValue({
+        supported: true,
+        enabled: false,
+        commandPath: '/usr/local/bin/awed',
+      });
+      mockElectronAPI.setCliCommandEnabled = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, enabled: true, commandPath: '/usr/local/bin/awed' })
+        .mockResolvedValueOnce({ ok: true, enabled: false, commandPath: '/usr/local/bin/awed' });
+
+      renderModal(true);
+      const checkbox = (await screen.findByTestId('settings-cli-command-checkbox')) as HTMLInputElement;
+      expect(checkbox.checked).toBe(false);
+
+      fireEvent.click(checkbox);
+      await waitFor(() => expect(mockElectronAPI.setCliCommandEnabled).toHaveBeenCalledWith(true));
+      expect(checkbox.checked).toBe(true);
+
+      fireEvent.click(checkbox);
+      await waitFor(() => expect(mockElectronAPI.setCliCommandEnabled).toHaveBeenCalledWith(false));
+      expect(checkbox.checked).toBe(false);
+    });
+
+    it('displays an error message when setCliCommandEnabled fails', async () => {
+      mockElectronAPI.getCliCommandStatus = vi.fn().mockResolvedValue({
+        supported: true,
+        enabled: false,
+        commandPath: '/usr/local/bin/awed',
+      });
+      mockElectronAPI.setCliCommandEnabled = vi.fn().mockResolvedValue({
+        ok: false,
+        enabled: false,
+        commandPath: '/usr/local/bin/awed',
+        error: 'EACCES: permission denied',
+      });
+
+      renderModal(true);
+      const checkbox = (await screen.findByTestId('settings-cli-command-checkbox')) as HTMLInputElement;
+      fireEvent.click(checkbox);
+
+      await waitFor(() =>
+        expect(screen.getByTestId('settings-cli-command-error').textContent).toBe('EACCES: permission denied'),
+      );
+      expect(checkbox.checked).toBe(false);
     });
   });
 });

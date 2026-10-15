@@ -36,6 +36,23 @@ export const electronAPI = {
   getDefaultSessionDir: () => ipcRenderer.invoke('settings:getDefaultDir'),
   openDirDialog: () => ipcRenderer.invoke('settings:openDirDialog'),
   openInExplorer: (dirPath: string) => ipcRenderer.invoke('settings:openInExplorer', dirPath),
+  getContextMenuStatus: () =>
+    ipcRenderer.invoke('contextMenu:getStatus') as Promise<{ supported: boolean; enabled: boolean }>,
+  setContextMenuEnabled: (enable: boolean) =>
+    ipcRenderer.invoke('contextMenu:setEnabled', enable) as Promise<
+      { ok: true; enabled: boolean } | { ok: false; enabled: boolean; error: string }
+    >,
+  getCliCommandStatus: () =>
+    ipcRenderer.invoke('cliCommand:getStatus') as Promise<{
+      supported: boolean;
+      enabled: boolean;
+      commandPath: string | null;
+    }>,
+  setCliCommandEnabled: (enable: boolean) =>
+    ipcRenderer.invoke('cliCommand:setEnabled', enable) as Promise<
+      | { ok: true; enabled: boolean; commandPath: string | null }
+      | { ok: false; enabled: boolean; commandPath: string | null; error: string }
+    >,
   showItemInFolder: (filePath: string) => ipcRenderer.invoke('file:showInFolder', filePath),
   /** Opens the configured external terminal in the folder containing `filePath` (null = home folder). Resolves false on failure. */
   openInTerminal: (filePath: string | null) => ipcRenderer.invoke('file:openInTerminal', filePath) as Promise<boolean>,

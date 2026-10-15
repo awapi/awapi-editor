@@ -107,6 +107,21 @@ declare global {
       getDefaultSessionDir: () => Promise<string>;
       openDirDialog: () => Promise<string | null>;
       openInExplorer: (dirPath: string) => Promise<void>;
+      getContextMenuStatus: () => Promise<{ supported: boolean; enabled: boolean }>;
+      setContextMenuEnabled: (
+        enable: boolean
+      ) => Promise<{ ok: true; enabled: boolean } | { ok: false; enabled: boolean; error: string }>;
+      getCliCommandStatus: () => Promise<{
+        supported: boolean;
+        enabled: boolean;
+        commandPath: string | null;
+      }>;
+      setCliCommandEnabled: (
+        enable: boolean
+      ) => Promise<
+        | { ok: true; enabled: boolean; commandPath: string | null }
+        | { ok: false; enabled: boolean; commandPath: string | null; error: string }
+      >;
 
       onNewFile: (callback: () => void) => void;
       onOpenFile: (callback: () => void) => void;

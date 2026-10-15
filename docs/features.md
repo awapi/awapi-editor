@@ -42,7 +42,7 @@ AwapiEditor is designed around a simple philosophy: **deliver the speed, reliabi
 - **Open Recent Files:** `File -> Open Recent` submenu tracking the 10 most recently opened/saved files (with automatic pruning of deleted files and a `Clear Recent` action).
 - **External File Change Detection:** Watches open files on disk, in the main window and in pop-out windows. Clean tabs reload automatically when the file changes. Tabs with unsaved changes ask before reloading. If the file is deleted, the tab is marked unsaved. A reload keeps the tab's encoding unless the file on disk no longer fits it (for example, a BOM was added), and then the tab switches to the new encoding.
 - **Drag & Drop:** Drag one or more files from the OS file manager directly into the window to open them in tabs.
-- **OS "Open With" & CLI Support:** Open files passed via command-line arguments or macOS Finder / Windows Explorer "Open With", routing to the existing window via single-instance lock.
+- **OS "Open With", Windows Explorer Context Menu & CLI Support:** Open files passed via command-line arguments, macOS Finder / Windows Explorer "Open With", or the **Edit with AwapiEditor** Windows Explorer right-click menu (registered automatically by the Windows installer, removed on uninstall, and toggleable anytime in **Preferences**), routing to the existing window via single-instance lock.
 - **Print & Print Preview:** Native printing (`Cmd/Ctrl+P`) and HTML Print Preview (`Cmd/Ctrl+Shift+P`).
 
 ### Editing & View Controls

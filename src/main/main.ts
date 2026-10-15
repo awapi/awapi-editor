@@ -40,6 +40,18 @@ import {
   refreshWatchedFile,
   clearAllWatchedFiles,
 } from './fileWatcher';
+import {
+  getContextMenuStatus,
+  setContextMenuEnabled,
+  type ContextMenuDeps,
+} from './contextMenu';
+import {
+  fileArgsFromArgv,
+  getCliCommandStatus,
+  setCliCommandEnabled,
+  type CliCommandDeps,
+  type CliArgDeps,
+} from './cliCommand';
 import { 
   loadAppSettings, 
   saveAppSettings, 
@@ -79,22 +91,24 @@ const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
 
 /**
- * Extract a file path from argv produced by Electron / the OS.
- * Electron prepends the executable (and in dev the Vite entry), so we skip
- * everything up to and including "--" or the first non-flag argument that
- * looks like a real filesystem path.
+ * Extract all file paths from argv produced by Electron / the OS, resolving
+ * relative paths against `workingDirectory`.
  */
-function fileArgFromArgv(argv: string[]): string | null {
-  // In packaged builds argv[0] is the executable; in dev argv[0..1] are
-  // electron + the entry script.  We skip the first 1-2 elements and look
-  // for the first argument that is not a flag and exists on disk.
-  const candidates = argv.slice(isDev ? 2 : 1);
-  for (const arg of candidates) {
-    if (!arg.startsWith('-') && fs.existsSync(arg)) {
-      return arg;
-    }
-  }
-  return null;
+function cliArgDeps(): CliArgDeps {
+  return {
+    platform: process.platform,
+    isFile: (p: string) => {
+      try {
+        return fs.statSync(p).isFile();
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
+function extractFilesFromArgv(argv: string[], workingDirectory = process.cwd()): string[] {
+  return fileArgsFromArgv(argv, isDev, workingDirectory, cliArgDeps());
 }
 
 /** Add `filePath` to "Open Recent" and refresh the application menu. */
@@ -140,14 +154,16 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', (_event, argv) => {
+  app.on('second-instance', (_event, argv, workingDirectory) => {
     // Bring existing window to front
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
-    const filePath = fileArgFromArgv(argv);
-    if (filePath) sendFileToRenderer(filePath);
+    const filePaths = extractFilesFromArgv(argv, workingDirectory || process.cwd());
+    for (const filePath of filePaths) {
+      sendFileToRenderer(filePath);
+    }
   });
 }
 
@@ -217,13 +233,15 @@ app.whenReady().then(() => {
   // An 'open-file' event right after 'ready' may already have created it.
   if (!mainWindow) createWindow();
 
-  // Open file passed as CLI argument (Windows/Linux "Open With" or terminal)
-  const cliFile = fileArgFromArgv(process.argv);
-  const fileToOpen = pendingOpenFilePath ?? cliFile;
-  if (fileToOpen) {
+  // Open file(s) passed as CLI arguments (Windows/Linux "Open With" or terminal `awed`)
+  const cliFiles = extractFilesFromArgv(process.argv, process.cwd());
+  const filesToOpen = pendingOpenFilePath
+    ? [pendingOpenFilePath, ...cliFiles.filter(f => f !== pendingOpenFilePath)]
+    : cliFiles;
+  for (const fileToOpen of filesToOpen) {
     sendFileToRenderer(fileToOpen);
-    pendingOpenFilePath = null;
   }
+  pendingOpenFilePath = null;
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -354,6 +372,76 @@ ipcMain.handle('settings:openDirDialog', async (event) => {
 ipcMain.handle('settings:openInExplorer', async (_, dirPath: string) => {
   await shell.openPath(dirPath);
 });
+
+// ── Windows Explorer Context Menu ────────────────────────────────────────────
+function contextMenuDeps(): ContextMenuDeps {
+  return {
+    platform: process.platform,
+    execPath: process.execPath,
+    isPackaged: app.isPackaged,
+    iconPath: join(__dirname, '../../build/icon.ico'),
+    appEntryPath: join(__dirname, 'main.js'),
+    runReg: (args: string[]) =>
+      new Promise((resolve) => {
+        try {
+          const child = spawn('reg.exe', args, { windowsHide: true });
+          let stdout = '';
+          let stderr = '';
+          child.stdout?.on('data', (chunk) => {
+            stdout += String(chunk);
+          });
+          child.stderr?.on('data', (chunk) => {
+            stderr += String(chunk);
+          });
+          child.on('error', (err) => {
+            resolve({ code: 1, stdout, stderr: err.message });
+          });
+          child.on('close', (code) => {
+            resolve({ code: code ?? 1, stdout, stderr });
+          });
+        } catch (err) {
+          resolve({
+            code: 1,
+            stdout: '',
+            stderr: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }),
+  };
+}
+
+ipcMain.handle('contextMenu:getStatus', () => getContextMenuStatus(contextMenuDeps()));
+
+ipcMain.handle('contextMenu:setEnabled', (_, enable: boolean) =>
+  setContextMenuEnabled(Boolean(enable), contextMenuDeps()),
+);
+
+// ── CLI Command (`awed`) ─────────────────────────────────────────────────────
+function cliCommandDeps(): CliCommandDeps {
+  return {
+    platform: process.platform,
+    env: process.env,
+    homeDir: app.getPath('home'),
+    execPath: process.execPath,
+    isPackaged: app.isPackaged,
+    appEntryPath: join(__dirname, 'main.js'),
+    exists: (p: string) => fs.existsSync(p),
+    mkdir: (p: string) => fs.mkdirSync(p, { recursive: true }),
+    writeFile: (p: string, content: string, mode?: number) => {
+      fs.writeFileSync(p, content, { encoding: 'utf-8', ...(mode !== undefined ? { mode } : {}) });
+      if (mode !== undefined && process.platform !== 'win32') {
+        fs.chmodSync(p, mode);
+      }
+    },
+    unlink: (p: string) => fs.unlinkSync(p),
+  };
+}
+
+ipcMain.handle('cliCommand:getStatus', () => getCliCommandStatus(cliCommandDeps()));
+
+ipcMain.handle('cliCommand:setEnabled', (_, enable: boolean) =>
+  setCliCommandEnabled(Boolean(enable), cliCommandDeps()),
+);
 
 ipcMain.handle('file:showInFolder', async (_, filePath: string) => {
   if (typeof filePath === 'string' && filePath) {

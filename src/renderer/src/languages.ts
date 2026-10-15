@@ -17,6 +17,7 @@ export const DEFAULT_LANGUAGE_ID = 'plaintext';
  */
 export const SUPPORTED_LANGUAGES: LanguageOption[] = [
   { id: 'plaintext', label: 'Plain Text' },
+  { id: 'csv', label: 'CSV / TSV' },
   { id: 'json', label: 'JSON' },
   { id: 'javascript', label: 'JavaScript' },
   { id: 'typescript', label: 'TypeScript' },
@@ -73,6 +74,8 @@ export const SUPPORTED_LANGUAGES: LanguageOption[] = [
 
 /** Extension (without leading dot, lowercase) -> Monaco language id. */
 const EXTENSION_MAP: Record<string, string> = {
+  csv: 'csv',
+  tsv: 'csv',
   json: 'json',
   jsonc: 'json',
   js: 'javascript',

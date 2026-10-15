@@ -2,10 +2,16 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   CONTEXT_MENU_KEY,
   CONTEXT_MENU_COMMAND_KEY,
+  CONTEXT_MENU_DIR_KEY,
+  CONTEXT_MENU_DIR_COMMAND_KEY,
+  CONTEXT_MENU_DIR_BG_KEY,
+  CONTEXT_MENU_DIR_BG_COMMAND_KEY,
   CONTEXT_MENU_LABEL,
   buildQueryArgs,
+  buildQueryCommands,
   buildRegisterCommands,
   buildUnregisterArgs,
+  buildUnregisterCommands,
   isContextMenuSupported,
   getContextMenuStatus,
   setContextMenuEnabled,
@@ -24,16 +30,27 @@ function createDeps(overrides: Partial<ContextMenuDeps> = {}): ContextMenuDeps {
 
 describe('contextMenu', () => {
   describe('command builders', () => {
-    it('builds query args for the command subkey', () => {
+    it('builds query args for the file and directory command subkeys', () => {
       expect(buildQueryArgs()).toEqual(['query', CONTEXT_MENU_COMMAND_KEY, '/ve']);
+      expect(buildQueryCommands()).toEqual([
+        ['query', CONTEXT_MENU_COMMAND_KEY, '/ve'],
+        ['query', CONTEXT_MENU_DIR_COMMAND_KEY, '/ve'],
+        ['query', CONTEXT_MENU_DIR_BG_COMMAND_KEY, '/ve'],
+      ]);
     });
 
-    it('builds registration commands with label, icon, and "%1" command', () => {
+    it('builds registration commands for files (*), folders (Directory), and folder backgrounds (Directory\\Background)', () => {
       const exe = 'C:\\Program Files\\AwapiEditor\\AwapiEditor.exe';
       expect(buildRegisterCommands(exe)).toEqual([
         ['add', CONTEXT_MENU_KEY, '/ve', '/t', 'REG_SZ', '/d', CONTEXT_MENU_LABEL, '/f'],
         ['add', CONTEXT_MENU_KEY, '/v', 'Icon', '/t', 'REG_SZ', '/d', `"${exe}",0`, '/f'],
         ['add', CONTEXT_MENU_COMMAND_KEY, '/ve', '/t', 'REG_SZ', '/d', `"${exe}" "%1"`, '/f'],
+        ['add', CONTEXT_MENU_DIR_KEY, '/ve', '/t', 'REG_SZ', '/d', CONTEXT_MENU_LABEL, '/f'],
+        ['add', CONTEXT_MENU_DIR_KEY, '/v', 'Icon', '/t', 'REG_SZ', '/d', `"${exe}",0`, '/f'],
+        ['add', CONTEXT_MENU_DIR_COMMAND_KEY, '/ve', '/t', 'REG_SZ', '/d', `"${exe}" "%1"`, '/f'],
+        ['add', CONTEXT_MENU_DIR_BG_KEY, '/ve', '/t', 'REG_SZ', '/d', CONTEXT_MENU_LABEL, '/f'],
+        ['add', CONTEXT_MENU_DIR_BG_KEY, '/v', 'Icon', '/t', 'REG_SZ', '/d', `"${exe}",0`, '/f'],
+        ['add', CONTEXT_MENU_DIR_BG_COMMAND_KEY, '/ve', '/t', 'REG_SZ', '/d', `"${exe}" "%V"`, '/f'],
       ]);
     });
 
@@ -52,11 +69,22 @@ describe('contextMenu', () => {
         ['add', CONTEXT_MENU_KEY, '/ve', '/t', 'REG_SZ', '/d', CONTEXT_MENU_LABEL, '/f'],
         ['add', CONTEXT_MENU_KEY, '/v', 'Icon', '/t', 'REG_SZ', '/d', `"${iconPath}"`, '/f'],
         ['add', CONTEXT_MENU_COMMAND_KEY, '/ve', '/t', 'REG_SZ', '/d', `"${exe}" "${appEntryPath}" "%1"`, '/f'],
+        ['add', CONTEXT_MENU_DIR_KEY, '/ve', '/t', 'REG_SZ', '/d', CONTEXT_MENU_LABEL, '/f'],
+        ['add', CONTEXT_MENU_DIR_KEY, '/v', 'Icon', '/t', 'REG_SZ', '/d', `"${iconPath}"`, '/f'],
+        ['add', CONTEXT_MENU_DIR_COMMAND_KEY, '/ve', '/t', 'REG_SZ', '/d', `"${exe}" "${appEntryPath}" "%1"`, '/f'],
+        ['add', CONTEXT_MENU_DIR_BG_KEY, '/ve', '/t', 'REG_SZ', '/d', CONTEXT_MENU_LABEL, '/f'],
+        ['add', CONTEXT_MENU_DIR_BG_KEY, '/v', 'Icon', '/t', 'REG_SZ', '/d', `"${iconPath}"`, '/f'],
+        ['add', CONTEXT_MENU_DIR_BG_COMMAND_KEY, '/ve', '/t', 'REG_SZ', '/d', `"${exe}" "${appEntryPath}" "%V"`, '/f'],
       ]);
     });
 
-    it('builds unregister args to delete the shell key', () => {
+    it('builds unregister args to delete the shell keys', () => {
       expect(buildUnregisterArgs()).toEqual(['delete', CONTEXT_MENU_KEY, '/f']);
+      expect(buildUnregisterCommands()).toEqual([
+        ['delete', CONTEXT_MENU_KEY, '/f'],
+        ['delete', CONTEXT_MENU_DIR_KEY, '/f'],
+        ['delete', CONTEXT_MENU_DIR_BG_KEY, '/f'],
+      ]);
     });
   });
 
@@ -80,20 +108,30 @@ describe('contextMenu', () => {
       expect(runReg).not.toHaveBeenCalled();
     });
 
-    it('returns enabled: true when reg query succeeds with code 0', async () => {
+    it('returns enabled: true when all reg queries succeed with code 0', async () => {
       const runReg = vi.fn().mockResolvedValue({ code: 0, stdout: 'REG_SZ', stderr: '' });
       const status = await getContextMenuStatus(createDeps({ runReg }));
       expect(status).toEqual({ supported: true, enabled: true });
-      expect(runReg).toHaveBeenCalledWith(['query', CONTEXT_MENU_COMMAND_KEY, '/ve']);
+      expect(runReg).toHaveBeenCalledTimes(3);
+      expect(runReg.mock.calls.map(c => c[0])).toEqual(buildQueryCommands());
     });
 
-    it('returns enabled: false when reg query exits non-zero or throws', async () => {
+    it('returns enabled: false when any reg query exits non-zero or throws', async () => {
       const runRegMissing = vi.fn().mockResolvedValue({
         code: 1,
         stdout: '',
         stderr: 'ERROR: The system was unable to find the specified registry key or value.',
       });
       expect(await getContextMenuStatus(createDeps({ runReg: runRegMissing }))).toEqual({
+        supported: true,
+        enabled: false,
+      });
+
+      const runRegPartial = vi
+        .fn()
+        .mockResolvedValueOnce({ code: 0, stdout: 'REG_SZ', stderr: '' })
+        .mockResolvedValueOnce({ code: 1, stdout: '', stderr: 'Missing Directory key' });
+      expect(await getContextMenuStatus(createDeps({ runReg: runRegPartial }))).toEqual({
         supported: true,
         enabled: false,
       });
@@ -113,13 +151,13 @@ describe('contextMenu', () => {
       expect(res.enabled).toBe(false);
     });
 
-    it('registers label, Icon, and command keys when enabling', async () => {
+    it('registers file, folder, and folder-background keys when enabling', async () => {
       const runReg = vi.fn().mockResolvedValue({ code: 0, stdout: 'The operation completed successfully.', stderr: '' });
       const deps = createDeps({ runReg });
       const res = await setContextMenuEnabled(true, deps);
 
       expect(res).toEqual({ ok: true, enabled: true });
-      expect(runReg).toHaveBeenCalledTimes(3);
+      expect(runReg).toHaveBeenCalledTimes(9);
       expect(runReg.mock.calls.map(c => c[0])).toEqual(buildRegisterCommands(deps.execPath));
     });
 
@@ -138,30 +176,37 @@ describe('contextMenu', () => {
       expect(runReg).toHaveBeenCalledTimes(2);
     });
 
-    it('deletes the registry key when disabling', async () => {
+    it('deletes all registry keys when disabling', async () => {
       const runReg = vi.fn().mockResolvedValue({ code: 0, stdout: '', stderr: '' });
       const res = await setContextMenuEnabled(false, createDeps({ runReg }));
 
       expect(res).toEqual({ ok: true, enabled: false });
-      expect(runReg).toHaveBeenCalledWith(['delete', CONTEXT_MENU_KEY, '/f']);
+      expect(runReg.mock.calls.map(c => c[0])).toEqual(buildUnregisterCommands());
     });
 
-    it('treats disable as succeeding if reg delete fails because the key is already absent', async () => {
+    it('treats disable as succeeding if reg delete fails because the keys are already absent', async () => {
       const runReg = vi
         .fn()
-        // First call: reg delete fails
+        // Delete calls: some or all fail because keys don't exist
         .mockResolvedValueOnce({ code: 1, stdout: '', stderr: 'ERROR: Unable to find key' })
-        // Second call: reg query confirms key does not exist
+        .mockResolvedValueOnce({ code: 1, stdout: '', stderr: 'ERROR: Unable to find key' })
+        .mockResolvedValueOnce({ code: 1, stdout: '', stderr: 'ERROR: Unable to find key' })
+        // Query calls confirm none of the keys exist
+        .mockResolvedValueOnce({ code: 1, stdout: '', stderr: 'ERROR: Unable to find key' })
+        .mockResolvedValueOnce({ code: 1, stdout: '', stderr: 'ERROR: Unable to find key' })
         .mockResolvedValueOnce({ code: 1, stdout: '', stderr: 'ERROR: Unable to find key' });
       const res = await setContextMenuEnabled(false, createDeps({ runReg }));
 
       expect(res).toEqual({ ok: true, enabled: false });
     });
 
-    it('returns an error on disable if reg delete fails and key is still present', async () => {
+    it('returns an error on disable if reg delete fails and a key is still present', async () => {
       const runReg = vi
         .fn()
         .mockResolvedValueOnce({ code: 1, stdout: '', stderr: 'ERROR: Access is denied.' })
+        .mockResolvedValueOnce({ code: 0, stdout: '', stderr: '' })
+        .mockResolvedValueOnce({ code: 0, stdout: '', stderr: '' })
+        // Query check finds first key still exists
         .mockResolvedValueOnce({ code: 0, stdout: 'still exists', stderr: '' });
       const res = await setContextMenuEnabled(false, createDeps({ runReg }));
 

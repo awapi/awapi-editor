@@ -42,7 +42,7 @@ AwapiEditor is designed around a simple philosophy: **deliver the speed, reliabi
 - **Open Recent Files:** `File -> Open Recent` submenu tracking the 10 most recently opened/saved files (with automatic pruning of deleted files and a `Clear Recent` action).
 - **External File Change Detection:** Watches open files on disk, in the main window and in pop-out windows. Clean tabs reload automatically when the file changes. Tabs with unsaved changes ask before reloading. If the file is deleted, the tab is marked unsaved. A reload keeps the tab's encoding unless the file on disk no longer fits it (for example, a BOM was added), and then the tab switches to the new encoding.
 - **Drag & Drop:** Drag one or more files from the OS file manager directly into the window to open them in tabs.
-- **OS "Open With", Windows Explorer Context Menu & CLI Support:** Open files passed via command-line arguments, macOS Finder / Windows Explorer "Open With", or the **Edit with AwapiEditor** Windows Explorer right-click menu (registered automatically by the Windows installer, removed on uninstall, and toggleable anytime in **Preferences**), routing to the existing window via single-instance lock.
+- **OS "Open With", Windows Explorer Context Menu & CLI Support:** Open files or folders passed via command-line arguments, macOS Finder / Windows Explorer "Open With", or the **Edit with AwapiEditor** Windows Explorer right-click menu on files and folders (registered automatically by the Windows installer, removed on uninstall, and toggleable anytime in **Preferences**), routing to the existing window via single-instance lock.
 - **Print & Print Preview:** Native printing (`Cmd/Ctrl+P`) and HTML Print Preview (`Cmd/Ctrl+Shift+P`).
 
 ### Editing & View Controls
@@ -59,6 +59,7 @@ AwapiEditor is designed around a simple philosophy: **deliver the speed, reliabi
 - **Line & Text Operations (`Edit -> Line & Text Operations`):** Sort lines ascending/descending, remove duplicate lines, remove empty lines, trim trailing whitespace, and convert selection/document to `UPPERCASE` or `lowercase`. The document's final newline stays at the end.
 - **Word Wrap & Whitespace/EOL Toggles:** Quick toolbar and `View` menu toggles for Word Wrap and Show Whitespace & EOL (`¶`).
 - **Per-Window Zoom:** Zoom In (`Cmd/Ctrl+=` or `Cmd/Ctrl++`), Zoom Out (`Cmd/Ctrl+-`), and Reset Zoom (`Cmd/Ctrl+0`), tracked independently per window.
+- **Getting Started & Quick Guide:** Built-in `Help -> Getting Started & Help…` modal (and `?` button in the top-right toolbar) with a high-level overview of opening files, drag & drop, the `awed` CLI command, tabs, split/diff views, CSV grid editing, and terminals.
 - **Keyboard Shortcuts Reference (`Shift+F1`):** Built-in `Help -> Keyboard Shortcuts…` cheat-sheet modal plus hover tooltips on tab controls. (`Cmd/Ctrl+/` is left to Monaco's *Toggle Line Comment*.)
 - **Live Status Bar Metrics:** Displays cursor position (`Ln`, `Col`), selection summary (`Sel lines, chars`), total character count (`Chars`), line ending, and language, plus a terminal button that toggles the [integrated terminal](#terminal).
 - **Themes:** Global Dark and Light themes (synced with the native OS title bar) configurable in **Preferences** (`Cmd/Ctrl+,`).

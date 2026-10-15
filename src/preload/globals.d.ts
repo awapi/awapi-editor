@@ -94,6 +94,8 @@ declare global {
         externalTerminal?: TerminalPreference;
         integratedShell?: TerminalPreference;
         terminalFont?: string | null;
+        explorerFolderPath?: string | null;
+        explorerVisible?: boolean;
       }>;
       /** Merges the given fields into the stored settings. */
       saveSettings: (settings: {
@@ -102,11 +104,31 @@ declare global {
         externalTerminal?: TerminalPreference;
         integratedShell?: TerminalPreference;
         terminalFont?: string | null;
+        explorerFolderPath?: string | null;
+        explorerVisible?: boolean;
       }) => Promise<boolean>;
       applyNativeTheme: (theme: string) => Promise<void>;
       getDefaultSessionDir: () => Promise<string>;
       openDirDialog: () => Promise<string | null>;
       openInExplorer: (dirPath: string) => Promise<void>;
+      openExplorerFolderDialog: () => Promise<string | null>;
+      readDirectory: (
+        dirPath: string
+      ) => Promise<
+        | { ok: true; dirPath: string; name: string; entries: Array<{ name: string; path: string; isDirectory: boolean }> }
+        | { ok: false; error: string }
+      >;
+      deletePath: (targetPath: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+      createFile: (
+        parentDirPath: string,
+        name: string
+      ) => Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+      createFolder: (
+        parentDirPath: string,
+        name: string
+      ) => Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+      syncWatchedDirs: (dirPaths: string[]) => Promise<void>;
+      onExplorerDirChanged: (callback: (dirPath: string) => void) => () => void;
       getContextMenuStatus: () => Promise<{ supported: boolean; enabled: boolean }>;
       setContextMenuEnabled: (
         enable: boolean
@@ -125,6 +147,7 @@ declare global {
 
       onNewFile: (callback: () => void) => void;
       onOpenFile: (callback: () => void) => void;
+      onOpenFolder: (callback: () => void) => void;
       onSaveFile: (callback: () => void) => void;
       onSaveAsFile: (callback: () => void) => void;
       onSaveAllFiles: (callback: () => void) => void;
@@ -135,6 +158,7 @@ declare global {
       onFindInTabs: (callback: () => void) => void;
       onGoToLine: (callback: () => void) => void;
       onToggleWhitespace: (callback: () => void) => void;
+      onToggleExplorer: (callback: () => void) => void;
       onToggleSplitView: (callback: () => void) => void;
       onToggleTerminal: (callback: () => void) => void;
       onNewTerminal: (callback: () => void) => void;
@@ -157,7 +181,10 @@ declare global {
       onPrintPreview: (callback: () => void) => void;
       onOpenSettings: (callback: () => void) => void;
       onOpenShortcuts: (callback: () => void) => void;
+      onOpenHelp: (callback: () => void) => void;
       onShowAllCommands: (callback: () => void) => void;
+      onOpenFileFromArgs: (callback: (filePath: string) => void) => void;
+      onOpenFolderFromArgs: (callback: (dirPath: string) => void) => void;
       printPreview: (content: string, language: string, title: string) => Promise<void>;
 
       onPopoutActiveTab: (callback: () => void) => void;

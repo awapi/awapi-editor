@@ -21,6 +21,10 @@ export interface AppSettings {
   integratedShell?: string | null;
   /** Console (fixed-width) font family for the integrated terminal. null/undefined = default stack. */
   terminalFont?: string | null;
+  /** Last opened folder path in the File Explorer sidebar. null/undefined = none. */
+  explorerFolderPath?: string | null;
+  /** Whether the File Explorer sidebar was visible. */
+  explorerVisible?: boolean;
 }
 
 /** Lazily compute settings file path (not at module load time) */

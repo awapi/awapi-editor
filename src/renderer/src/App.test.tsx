@@ -163,6 +163,7 @@ describe('Editor Core Tests', () => {
       onPrintPreview: vi.fn(),
       onOpenSettings: vi.fn(),
       onOpenShortcuts: vi.fn(),
+      onOpenHelp: vi.fn(),
       onShowAllCommands: vi.fn(),
       onOpenFileFromArgs: vi.fn(),
       onPopoutActiveTab: vi.fn(),
@@ -505,6 +506,35 @@ describe('Editor Core Tests', () => {
     capturedCallback!('/tmp/existing.txt');
     // readFile should NOT have been called again for an already-open file
     await waitFor(() => expect((window as any).electronAPI.readFile.mock.calls.length).toBe(callsBefore));
+  });
+
+  it('opens the File Explorer sidebar rooted at the given folder when onOpenFolderFromArgs fires', async () => {
+    let capturedFolderCb: ((dirPath: string) => void) | null = null;
+    (window as any).electronAPI.onOpenFolderFromArgs = vi.fn((cb: (dirPath: string) => void) => {
+      capturedFolderCb = cb;
+    });
+    (window as any).electronAPI.readDirectory = vi.fn().mockResolvedValue({
+      ok: true,
+      dirPath: 'C:\\Projects\\MyFolder',
+      name: 'MyFolder',
+      entries: [],
+    });
+
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    );
+
+    await waitFor(() => expect(capturedFolderCb).not.toBeNull());
+    await act(async () => {
+      capturedFolderCb!('C:\\Projects\\MyFolder');
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('file-explorer-sidebar')).toBeTruthy();
+      expect((window as any).electronAPI.readDirectory).toHaveBeenCalledWith('C:\\Projects\\MyFolder');
+    });
   });
 
   it('closes a tab on middle-click (auxclick button=1)', async () => {
@@ -1312,6 +1342,28 @@ describe('Editor Core Tests', () => {
 
       await waitFor(() => expect(screen.getByTestId('shortcuts-modal')).toBeTruthy());
     });
+
+    it('opens Getting Started & Help modal via onOpenHelp IPC or the tab-bar ? button', async () => {
+      let openHelpCb: (() => void) | null = null;
+      (window as any).electronAPI.onOpenHelp = vi.fn((cb: () => void) => {
+        openHelpCb = cb;
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('alpha.txt'));
+
+      fireEvent.click(screen.getByTestId('help-toggle'));
+      await waitFor(() => expect(screen.getByTestId('help-modal')).toBeTruthy());
+
+      fireEvent.click(screen.getByTestId('help-close-btn'));
+      await waitFor(() => expect(screen.queryByTestId('help-modal')).toBeNull());
+
+      await waitFor(() => expect(openHelpCb).not.toBeNull());
+      act(() => {
+        openHelpCb!();
+      });
+      await waitFor(() => expect(screen.getByTestId('help-modal')).toBeTruthy());
+    });
   });
 
   describe('Phase 1 — File & Tab Workflow (Multi-file Open, Save All, Path Utilities, External Watch)', () => {
@@ -1334,6 +1386,95 @@ describe('Editor Core Tests', () => {
 
       await waitFor(() => expect(screen.getByText('one.txt')).toBeTruthy());
       expect(screen.getByText('two.txt')).toBeTruthy();
+    });
+
+    it('opens each file in a new tab when multiple files are dragged and dropped, even when dataTransfer.files is cleared after the synchronous drop handler', async () => {
+      (window as any).electronAPI.getPathForFile = vi.fn((file: File) => `/tmp/${file.name}`);
+      (window as any).electronAPI.readFile = vi.fn().mockImplementation(async (fp: string) => {
+        // Yield a macrotask to simulate async IPC and ensure dataTransfer.files
+        // has already been cleared by the browser after synchronous dispatch.
+        await new Promise(resolve => setTimeout(resolve, 0));
+        return {
+          filePath: fp,
+          content: `content of ${fp}`,
+          eol: 'LF',
+        };
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/Untitled/));
+
+      const file1 = new File(['a'], 'drop-one.txt', { type: 'text/plain' });
+      const file2 = new File(['b'], 'drop-two.txt', { type: 'text/plain' });
+      const file3 = new File(['c'], 'drop-three.txt', { type: 'text/plain' });
+
+      const liveFiles = [file1, file2, file3];
+      const dropEvent = new Event('drop', { bubbles: true, cancelable: true }) as any;
+      dropEvent.dataTransfer = {
+        types: ['Files'],
+        files: liveFiles,
+      };
+
+      await act(async () => {
+        window.dispatchEvent(dropEvent);
+        // Simulate Chromium clearing DataTransfer.files once the drop event finishes dispatching
+        liveFiles.length = 0;
+      });
+
+      await waitFor(() => expect(screen.getByText('drop-one.txt')).toBeTruthy());
+      await waitFor(() => expect(screen.getByText('drop-two.txt')).toBeTruthy());
+      await waitFor(() => expect(screen.getByText('drop-three.txt')).toBeTruthy());
+
+      expect((window as any).electronAPI.readFile).toHaveBeenCalledTimes(3);
+      expect((window as any).electronAPI.readFile).toHaveBeenCalledWith('/tmp/drop-one.txt', { trackRecent: true });
+      expect((window as any).electronAPI.readFile).toHaveBeenCalledWith('/tmp/drop-two.txt', { trackRecent: true });
+      expect((window as any).electronAPI.readFile).toHaveBeenCalledWith('/tmp/drop-three.txt', { trackRecent: true });
+    });
+
+    it('deduplicates already-open or duplicate files when dropping multiple files', async () => {
+      (window as any).electronAPI.loadSession.mockResolvedValueOnce({
+        activeTabId: 'tab-existing',
+        tabs: [
+          {
+            id: 'tab-existing',
+            title: 'existing.txt',
+            filePath: '/tmp/existing.txt',
+            content: 'existing content',
+            isDirty: false,
+            eol: 'LF',
+          },
+        ],
+      });
+      (window as any).electronAPI.getPathForFile = vi.fn((file: File) => `/tmp/${file.name}`);
+      (window as any).electronAPI.readFile = vi.fn().mockImplementation(async (fp: string) => ({
+        filePath: fp,
+        content: `content of ${fp}`,
+        eol: 'LF',
+      }));
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText('existing.txt'));
+      (window as any).electronAPI.readFile.mockClear();
+
+      const existingFile = new File(['e'], 'existing.txt', { type: 'text/plain' });
+      const newFile = new File(['n'], 'fresh.txt', { type: 'text/plain' });
+      const dupNewFile = new File(['n'], 'fresh.txt', { type: 'text/plain' });
+
+      const dropEvent = new Event('drop', { bubbles: true, cancelable: true }) as any;
+      dropEvent.dataTransfer = {
+        types: ['Files'],
+        files: [existingFile, newFile, dupNewFile],
+      };
+
+      await act(async () => {
+        window.dispatchEvent(dropEvent);
+      });
+
+      await waitFor(() => expect(screen.getByText('fresh.txt')).toBeTruthy());
+      expect(screen.getAllByText('existing.txt')).toHaveLength(1);
+      expect(screen.getAllByText('fresh.txt')).toHaveLength(1);
+      expect((window as any).electronAPI.readFile).toHaveBeenCalledTimes(1);
+      expect((window as any).electronAPI.readFile).toHaveBeenCalledWith('/tmp/fresh.txt', { trackRecent: true });
     });
 
     it('does nothing when openFileDialog resolves null or an empty list (CR-13)', async () => {
@@ -2163,6 +2304,155 @@ describe('Editor Core Tests', () => {
       });
       await waitFor(() => expect(screen.getAllByText(/three\.txt/).length).toBeGreaterThan(0));
       expect(select().value).toBe('tab-1');
+    });
+  });
+
+  describe('CSV Grid Editor integration', () => {
+    it('opens .csv tabs in the interactive grid editor and toggles between Grid View and Raw Text', async () => {
+      const api = (window as any).electronAPI;
+      api.loadSession.mockResolvedValue({
+        activeTabId: 'csv-1',
+        tabs: [
+          {
+            id: 'csv-1',
+            title: 'users.csv',
+            filePath: '/tmp/users.csv',
+            content: 'Name,Role\nAlice,Admin\nBob,User',
+            isDirty: false,
+            eol: 'LF',
+          },
+        ],
+      });
+      api.readFile = vi.fn().mockResolvedValue({
+        filePath: '/tmp/users.csv',
+        content: 'Name,Role\nAlice,Admin\nBob,User',
+        eol: 'LF',
+        encoding: 'utf-8',
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => expect(screen.getByTestId('csv-grid-editor')).toBeTruthy());
+
+      // Edit cell in grid and verify tab becomes dirty
+      fireEvent.change(screen.getByTestId('csv-cell-1-1'), { target: { value: 'Owner' } });
+      expect(screen.getByText(/users\.csv \*/)).toBeTruthy();
+
+      // Switch to Raw Text view and back to Grid View
+      fireEvent.click(screen.getByTestId('csv-switch-to-text-button'));
+      expect(screen.getByTestId('csv-raw-text-banner')).toBeTruthy();
+
+      fireEvent.click(screen.getByTestId('csv-switch-to-grid-button'));
+      expect(screen.getByTestId('csv-grid-editor')).toBeTruthy();
+      expect((screen.getByTestId('csv-cell-1-1') as HTMLInputElement).value).toBe('Owner');
+    });
+  });
+
+  describe('File Explorer Sidebar integration', () => {
+    it('toggles File Explorer from the toolbar and View menu, opens a tab folder from the tab context menu, and opens files on click', async () => {
+      let toggleExplorerCb: (() => void) | undefined;
+      const api = (window as any).electronAPI;
+      api.onToggleExplorer = vi.fn((cb: () => void) => {
+        toggleExplorerCb = cb;
+      });
+      api.readDirectory = vi.fn(async (dirPath: string) => ({
+        ok: true,
+        dirPath,
+        name: 'samples',
+        entries: [
+          { name: 'sample.cs', path: '/workspace/samples/sample.cs', isDirectory: false },
+          { name: 'sample.py', path: '/workspace/samples/sample.py', isDirectory: false },
+          { name: 'sample.sql', path: '/workspace/samples/sample.sql', isDirectory: false },
+        ],
+      }));
+      api.readFile = vi.fn(async (filePath: string) => ({
+        filePath,
+        content: filePath.endsWith('.py')
+          ? 'print("hi")'
+          : filePath.endsWith('.sql')
+          ? 'SELECT 1;'
+          : 'class Program {}',
+        eol: 'LF',
+        encoding: 'utf-8',
+      }));
+      api.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          {
+            id: 'tab-1',
+            title: 'sample.cs',
+            filePath: '/workspace/samples/sample.cs',
+            content: 'class Program {}',
+            isDirty: false,
+            eol: 'LF',
+          },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/sample\.cs/));
+
+      // Initially hidden
+      expect(screen.queryByTestId('file-explorer-sidebar')).toBeNull();
+
+      // Toggle on via View -> Toggle File Explorer menu IPC
+      act(() => {
+        toggleExplorerCb?.();
+      });
+      expect(screen.getByTestId('file-explorer-sidebar')).toBeTruthy();
+
+      // Toggle off via toolbar button
+      fireEvent.click(screen.getByTestId('explorer-toggle'));
+      expect(screen.queryByTestId('file-explorer-sidebar')).toBeNull();
+
+      // Right-click tab -> "Open Folder in File Explorer"
+      fireEvent.contextMenu(screen.getByText(/sample\.cs/));
+      fireEvent.click(screen.getByTestId('tab-context-open-folder-in-explorer'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('file-explorer-sidebar')).toBeTruthy();
+        expect(screen.getByTestId('explorer-file-sample.py')).toBeTruthy();
+      });
+
+      // Single-clicking sample.py opens it as an italic preview tab
+      fireEvent.click(screen.getByTestId('explorer-file-sample.py'));
+      await waitFor(() => {
+        expect(screen.getAllByText(/sample\.py/).length).toBeGreaterThan(0);
+      });
+      const previewTitle = screen.getAllByText(/sample\.py/).find(
+        el => el.getAttribute('data-testid')?.startsWith('tab-title-'),
+      ) as HTMLElement;
+      expect(previewTitle.style.fontStyle).toBe('italic');
+
+      // Single-clicking sample.sql replaces the unpinned sample.py preview tab
+      fireEvent.click(screen.getByTestId('explorer-file-sample.sql'));
+      await waitFor(() => {
+        const sqlTitle = screen.getAllByText(/sample\.sql/).find(
+          el => el.getAttribute('data-testid')?.startsWith('tab-title-'),
+        ) as HTMLElement;
+        expect(sqlTitle).toBeTruthy();
+        expect(sqlTitle.style.fontStyle).toBe('italic');
+      });
+      expect(
+        screen.queryAllByText(/sample\.py/).filter(el => el.getAttribute('data-testid')?.startsWith('tab-title-')).length,
+      ).toBe(0);
+
+      // Double-clicking the preview tab pins it (title becomes non-italic)
+      const sqlTabTitle = screen.getAllByText(/sample\.sql/).find(
+        el => el.getAttribute('data-testid')?.startsWith('tab-title-'),
+      ) as HTMLElement;
+      fireEvent.doubleClick(sqlTabTitle);
+      expect(sqlTabTitle.style.fontStyle).toBe('normal');
+
+      // Now single-clicking sample.py keeps sample.sql open and adds sample.py as a new preview tab
+      fireEvent.click(screen.getByTestId('explorer-file-sample.py'));
+      await waitFor(() => {
+        expect(
+          screen.getAllByText(/sample\.py/).some(el => el.getAttribute('data-testid')?.startsWith('tab-title-')),
+        ).toBe(true);
+      });
+      expect(
+        screen.getAllByText(/sample\.sql/).some(el => el.getAttribute('data-testid')?.startsWith('tab-title-')),
+      ).toBe(true);
     });
   });
 });

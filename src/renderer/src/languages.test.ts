@@ -21,6 +21,8 @@ describe('inferLanguageFromFilename', () => {
 
   it('maps common extensions to Monaco ids', () => {
     expect(inferLanguageFromFilename('data.json')).toBe('json');
+    expect(inferLanguageFromFilename('table.csv')).toBe('csv');
+    expect(inferLanguageFromFilename('table.tsv')).toBe('csv');
     expect(inferLanguageFromFilename('index.TS')).toBe('typescript');
     expect(inferLanguageFromFilename('script.js')).toBe('javascript');
     expect(inferLanguageFromFilename('notes.md')).toBe('markdown');

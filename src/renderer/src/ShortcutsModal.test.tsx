@@ -34,6 +34,8 @@ describe('ShortcutsModal', () => {
         <ShortcutsModal isOpen={true} onClose={vi.fn()} />
       </ThemeProvider>
     );
+    expect(screen.getByText('Toggle File Explorer')).toBeTruthy();
+    expect(screen.getByText('Cmd/Ctrl + B')).toBeTruthy();
     expect(screen.getByText('Toggle Integrated Terminal')).toBeTruthy();
     expect(screen.getByText('Ctrl + ` (all platforms)')).toBeTruthy();
     expect(screen.getByText('New Integrated Terminal')).toBeTruthy();

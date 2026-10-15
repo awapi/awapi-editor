@@ -8,7 +8,15 @@ import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { checkForUpdates } from './updater';
 import { ZOOM_STEP, adjustZoom, resetZoom, clearZoomState } from './zoom';
-import { GO_TO_LINE_ACCELERATOR, SHORTCUTS_REFERENCE_ACCELERATOR } from './shortcuts';
+import { GO_TO_LINE_ACCELERATOR, SHORTCUTS_REFERENCE_ACCELERATOR, TOGGLE_EXPLORER_ACCELERATOR } from './shortcuts';
+import {
+  listDirectoryEntries,
+  deleteExplorerPath,
+  createExplorerFile,
+  createExplorerFolder,
+  syncWatchedDirs,
+  clearAllWatchedDirs,
+} from './explorer';
 import { parseReadFileOptions } from './readFileOptions';
 import { openExternalTerminal, resolveTerminalCwd, type ExternalTerminalDeps } from './externalTerminal';
 import { getTerminalChoices, resolveShell } from './terminalDetection';
@@ -46,7 +54,7 @@ import {
   type ContextMenuDeps,
 } from './contextMenu';
 import {
-  fileArgsFromArgv,
+  pathsFromArgv,
   getCliCommandStatus,
   setCliCommandEnabled,
   type CliCommandDeps,
@@ -91,8 +99,8 @@ const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
 
 /**
- * Extract all file paths from argv produced by Electron / the OS, resolving
- * relative paths against `workingDirectory`.
+ * Extract all file and directory paths from argv produced by Electron / the OS,
+ * resolving relative paths against `workingDirectory`.
  */
 function cliArgDeps(): CliArgDeps {
   return {
@@ -104,11 +112,21 @@ function cliArgDeps(): CliArgDeps {
         return false;
       }
     },
+    isDirectory: (p: string) => {
+      try {
+        return fs.statSync(p).isDirectory();
+      } catch {
+        return false;
+      }
+    },
   };
 }
 
-function extractFilesFromArgv(argv: string[], workingDirectory = process.cwd()): string[] {
-  return fileArgsFromArgv(argv, isDev, workingDirectory, cliArgDeps());
+function extractPathsFromArgv(
+  argv: string[],
+  workingDirectory = process.cwd(),
+): { files: string[]; directories: string[] } {
+  return pathsFromArgv(argv, isDev, workingDirectory, cliArgDeps());
 }
 
 /** Add `filePath` to "Open Recent" and refresh the application menu. */
@@ -134,22 +152,48 @@ function sendFileToRenderer(filePath: string): void {
   sendWhenLoaded(win, 'file:openFromArgs', filePath);
 }
 
-// macOS: the OS sends this event when a file is opened via Finder / "Open With".
+/**
+ * Send a folder-open request (Windows Explorer folder context menu, macOS Finder,
+ * or CLI argument) to the renderer once it is ready so the File Explorer sidebar
+ * opens rooted at `dirPath`.
+ */
+function sendFolderToRenderer(dirPath: string): void {
+  const win = ensureWindow(mainWindow, () => {
+    createWindow();
+    return mainWindow!;
+  });
+  saveAppSettings({ explorerFolderPath: dirPath, explorerVisible: true });
+  sendWhenLoaded(win, 'folder:openFromArgs', dirPath);
+}
+
+function isExistingDirectory(targetPath: string): boolean {
+  try {
+    return fs.statSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// macOS: the OS sends this event when a file or folder is opened via Finder / "Open With".
 // It may fire before app.whenReady() (e.g. launching the app by opening a
 // file), so it is queued until startup creates the window.
-let pendingOpenFilePath: string | null = null;
-app.on('open-file', (event, filePath) => {
+let pendingOpenPath: string | null = null;
+app.on('open-file', (event, targetPath) => {
   event.preventDefault();
   if (app.isReady()) {
-    sendFileToRenderer(filePath);
+    if (isExistingDirectory(targetPath)) {
+      sendFolderToRenderer(targetPath);
+    } else {
+      sendFileToRenderer(targetPath);
+    }
   } else {
-    pendingOpenFilePath = filePath;
+    pendingOpenPath = targetPath;
   }
 });
 
 // Single-instance lock: if the app is already running and the user opens
-// another file via "Open With", the OS launches a second process. We redirect
-// that request to the existing window and quit the second process.
+// another file or folder via "Open With" / context menu, the OS launches a second
+// process. We redirect that request to the existing window and quit the second process.
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -160,8 +204,11 @@ if (!gotLock) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
-    const filePaths = extractFilesFromArgv(argv, workingDirectory || process.cwd());
-    for (const filePath of filePaths) {
+    const { files, directories } = extractPathsFromArgv(argv, workingDirectory || process.cwd());
+    if (directories.length > 0) {
+      sendFolderToRenderer(directories[directories.length - 1]);
+    }
+    for (const filePath of files) {
       sendFileToRenderer(filePath);
     }
   });
@@ -188,6 +235,7 @@ function createWindow() {
     }
     watchRegistry.clear();
     clearAllWatchedFiles();
+    clearAllWatchedDirs();
     for (const winId of popoutWindowIds) {
       const win = BrowserWindow.fromId(winId);
       win?.destroy();
@@ -233,15 +281,26 @@ app.whenReady().then(() => {
   // An 'open-file' event right after 'ready' may already have created it.
   if (!mainWindow) createWindow();
 
-  // Open file(s) passed as CLI arguments (Windows/Linux "Open With" or terminal `awed`)
-  const cliFiles = extractFilesFromArgv(process.argv, process.cwd());
-  const filesToOpen = pendingOpenFilePath
-    ? [pendingOpenFilePath, ...cliFiles.filter(f => f !== pendingOpenFilePath)]
+  // Open file(s) or folder(s) passed as CLI arguments (Windows/Linux "Open With", context menu, or terminal `awed`)
+  const { files: cliFiles, directories: cliDirectories } = extractPathsFromArgv(process.argv, process.cwd());
+  const pendingIsDir = pendingOpenPath ? isExistingDirectory(pendingOpenPath) : false;
+  const pendingFile = pendingOpenPath && !pendingIsDir ? pendingOpenPath : null;
+  const pendingDir = pendingOpenPath && pendingIsDir ? pendingOpenPath : null;
+
+  const dirsToOpen = pendingDir
+    ? [...cliDirectories.filter(d => d !== pendingDir), pendingDir]
+    : cliDirectories;
+  if (dirsToOpen.length > 0) {
+    sendFolderToRenderer(dirsToOpen[dirsToOpen.length - 1]);
+  }
+
+  const filesToOpen = pendingFile
+    ? [pendingFile, ...cliFiles.filter(f => f !== pendingFile)]
     : cliFiles;
   for (const fileToOpen of filesToOpen) {
     sendFileToRenderer(fileToOpen);
   }
-  pendingOpenFilePath = null;
+  pendingOpenPath = null;
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -371,6 +430,62 @@ ipcMain.handle('settings:openDirDialog', async (event) => {
 
 ipcMain.handle('settings:openInExplorer', async (_, dirPath: string) => {
   await shell.openPath(dirPath);
+});
+
+// ── File Explorer Sidebar IPC ────────────────────────────────────────────────
+ipcMain.handle('explorer:openFolderDialog', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (!win) return null;
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    properties: ['openDirectory'],
+    title: 'Open Folder in Explorer',
+  });
+  if (canceled || filePaths.length === 0) return null;
+  return filePaths[0];
+});
+
+ipcMain.handle('explorer:readDir', async (_, dirPath: string) => {
+  return listDirectoryEntries(dirPath);
+});
+
+ipcMain.handle('explorer:deletePath', async (_, targetPath: string) => {
+  const res = deleteExplorerPath(targetPath);
+  if (res.ok && typeof targetPath === 'string' && targetPath) {
+    removeRecentFile(targetPath);
+    rebuildAppMenu();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('explorer:dirChanged', dirname(targetPath));
+    }
+  }
+  return res;
+});
+
+ipcMain.handle('explorer:createFile', async (_, parentDirPath: string, name: string) => {
+  const res = createExplorerFile(parentDirPath, name);
+  if (res.ok && typeof parentDirPath === 'string' && parentDirPath) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('explorer:dirChanged', parentDirPath);
+    }
+  }
+  return res;
+});
+
+ipcMain.handle('explorer:createFolder', async (_, parentDirPath: string, name: string) => {
+  const res = createExplorerFolder(parentDirPath, name);
+  if (res.ok && typeof parentDirPath === 'string' && parentDirPath) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('explorer:dirChanged', parentDirPath);
+    }
+  }
+  return res;
+});
+
+ipcMain.handle('explorer:watchDirs', async (_, dirPaths: unknown) => {
+  syncWatchedDirs(dirPaths, (changedDirPath) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('explorer:dirChanged', changedDirPath);
+    }
+  });
 });
 
 // ── Windows Explorer Context Menu ────────────────────────────────────────────
@@ -739,6 +854,9 @@ ipcMain.handle(
     refreshWatchedFile(targetPath);
     addRecentFile(targetPath);
     rebuildAppMenu();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('explorer:dirChanged', dirname(targetPath));
+    }
     return targetPath;
   },
 );
@@ -785,9 +903,20 @@ ipcMain.handle('file:rename', async (_event, oldPath: string, newName: string) =
     markSelfSaved(oldPath);
     markSelfSaved(newPath);
     fs.renameSync(oldPath, newPath);
-    removeRecentFile(oldPath);
-    addRecentFile(newPath);
-    rebuildAppMenu();
+    let isDir = false;
+    try {
+      isDir = fs.statSync(newPath).isDirectory();
+    } catch {
+      isDir = false;
+    }
+    if (!isDir) {
+      removeRecentFile(oldPath);
+      addRecentFile(newPath);
+      rebuildAppMenu();
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('explorer:dirChanged', dir);
+    }
     return { ok: true as const, newPath };
   } catch (err) {
     return { ok: false as const, error: (err as Error).message };
@@ -1146,6 +1275,7 @@ function rebuildAppMenu(): void {
       submenu: [
         { label: 'New', accelerator: 'CmdOrCtrl+N', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:new') },
         { label: 'Open', accelerator: 'CmdOrCtrl+O', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:open') },
+        { label: 'Open Folder…', click: () => mainWindow?.webContents.send('menu:openFolder') },
         { label: 'Open Recent', submenu: buildRecentFilesSubmenu() },
         { label: 'Save', accelerator: 'CmdOrCtrl+S', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:save') },
         { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:saveAs') },
@@ -1251,6 +1381,11 @@ function rebuildAppMenu(): void {
         },
         { type: 'separator' },
         {
+          label: 'Toggle File Explorer',
+          accelerator: TOGGLE_EXPLORER_ACCELERATOR,
+          click: () => mainWindow?.webContents.send('menu:toggleExplorer'),
+        },
+        {
           label: 'Toggle Terminal',
           accelerator: 'Ctrl+`',
           // Windows/Linux: the renderer handles Ctrl+` itself (so it works while
@@ -1282,6 +1417,10 @@ function rebuildAppMenu(): void {
     {
       role: 'help',
       submenu: [
+        {
+          label: 'Getting Started & Help…',
+          click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:openHelp'),
+        },
         {
           label: 'Keyboard Shortcuts…',
           accelerator: SHORTCUTS_REFERENCE_ACCELERATOR,

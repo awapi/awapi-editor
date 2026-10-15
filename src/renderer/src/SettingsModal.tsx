@@ -499,7 +499,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialT
                       <span>Show &ldquo;Edit with AwapiEditor&rdquo; in Windows Explorer context menu</span>
                     </label>
                     <p style={{ fontSize: '12px', opacity: 0.6, margin: '6px 0 0' }}>
-                      Adds an &ldquo;Edit with AwapiEditor&rdquo; item when right-clicking any file in File Explorer.
+                      Adds an &ldquo;Edit with AwapiEditor&rdquo; item when right-clicking any file or folder in File Explorer.
                     </p>
                     {contextMenuError && (
                       <p

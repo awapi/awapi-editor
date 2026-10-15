@@ -26,6 +26,7 @@ interface FileExplorerProps {
   onPinTab?: (tabId: string) => void;
   onCloseTab: (e: React.MouseEvent, tabId: string) => void;
   onOpenFileFromTree: (filePath: string, options?: { preview?: boolean }) => void;
+  onOpenInIntegratedTerminal?: (dirPath: string) => void;
   onPickFolder: () => void;
   onCloseExplorer: () => void;
   /** Switches the File Explorer root to `dirPath` on the same instance. */
@@ -104,6 +105,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
   onPinTab,
   onCloseTab,
   onOpenFileFromTree,
+  onOpenInIntegratedTerminal,
   onPickFolder,
   onCloseExplorer,
   onChangeRootFolder,
@@ -327,6 +329,13 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     setCreateTarget({ parentDirPath: targetDirPath, kind: 'folder' });
     setCreateInput('');
     setCreateError(null);
+  };
+
+  const handleOpenTerminalFromContextMenu = () => {
+    if (!contextMenu) return;
+    const { targetDirPath } = contextMenu;
+    setContextMenu(null);
+    onOpenInIntegratedTerminal?.(targetDirPath);
   };
 
   const closeCreateModal = () => {
@@ -1205,6 +1214,33 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
               padding: '4px 0',
             }}
           >
+            <div
+              role="menuitem"
+              data-testid="explorer-context-open-terminal"
+              onClick={handleOpenTerminalFromContextMenu}
+              onMouseEnter={e => {
+                (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
+              }}
+              onMouseLeave={e => {
+                (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+              }}
+              style={{
+                padding: '7px 14px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                color: colors.foreground,
+                backgroundColor: 'transparent',
+              }}
+            >
+              Open in Integrated Terminal
+            </div>
+            <div
+              style={{
+                height: '1px',
+                margin: '4px 0',
+                backgroundColor: colors.tabHover,
+              }}
+            />
             {(contextMenu.entry === null || contextMenu.entry.isDirectory) && (
               <>
                 <div

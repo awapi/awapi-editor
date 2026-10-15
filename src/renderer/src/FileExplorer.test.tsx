@@ -209,6 +209,39 @@ describe('FileExplorer component', () => {
     });
   });
 
+  it('opens the selected folder or containing folder in the integrated terminal from the context menu', async () => {
+    const onOpenInIntegratedTerminal = vi.fn();
+    render(
+      <ThemeProvider>
+        <FileExplorer
+          isOpen={true}
+          rootFolderPath="/workspace/awapi-editor"
+          tabs={[]}
+          activeTabId={null}
+          onSelectTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onOpenFileFromTree={vi.fn()}
+          onOpenInIntegratedTerminal={onOpenInIntegratedTerminal}
+          onPickFolder={vi.fn()}
+          onCloseExplorer={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('explorer-folder-samples')).toBeTruthy();
+      expect(screen.getByTestId('explorer-file-package.json')).toBeTruthy();
+    });
+
+    fireEvent.contextMenu(screen.getByTestId('explorer-folder-samples'));
+    fireEvent.click(screen.getByTestId('explorer-context-open-terminal'));
+    expect(onOpenInIntegratedTerminal).toHaveBeenCalledWith('/workspace/awapi-editor/samples');
+
+    fireEvent.contextMenu(screen.getByTestId('explorer-file-package.json'));
+    fireEvent.click(screen.getByTestId('explorer-context-open-terminal'));
+    expect(onOpenInIntegratedTerminal).toHaveBeenLastCalledWith('/workspace/awapi-editor');
+  });
+
   it('automatically refreshes an expanded folder when a new file is saved or added to it', async () => {
     render(
       <ThemeProvider>

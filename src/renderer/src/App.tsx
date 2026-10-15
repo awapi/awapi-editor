@@ -1824,6 +1824,7 @@ const App: React.FC = () => {
           onPinTab={pinTab}
           onCloseTab={closeTab}
           onOpenFileFromTree={handleOpenFileFromExplorer}
+          onOpenInIntegratedTerminal={dirPath => { void terminals.createSession(dirPath); }}
           onPickFolder={() => { void handlePickExplorerFolder(); }}
           onCloseExplorer={() => setIsExplorerOpen(false)}
           onChangeRootFolder={setExplorerFolderPath}

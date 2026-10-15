@@ -288,6 +288,40 @@ describe('Editor Core Tests', () => {
       });
     });
 
+    it('opens an integrated terminal from the Explorer context menu in the selected folder', async () => {
+      const folderPath = '/workspace/my-folder/subfolder';
+      (window as any).electronAPI.loadSettings = vi.fn().mockResolvedValue({
+        explorerFolderPath: '/workspace/my-folder',
+        explorerVisible: true,
+      });
+      (window as any).electronAPI.readDirectory = vi.fn().mockImplementation(async (dirPath: string) => ({
+        ok: true,
+        dirPath,
+        name: dirPath.split('/').pop(),
+        entries: dirPath === '/workspace/my-folder'
+          ? [{ name: 'subfolder', path: folderPath, isDirectory: true }]
+          : [],
+      }));
+      (window as any).electronAPI.ptyCreate.mockResolvedValue({
+        ok: true,
+        id: 13,
+        cwd: folderPath,
+        shell: 'zsh',
+      });
+      await renderApp();
+
+      await waitFor(() => screen.getByTestId('explorer-folder-subfolder'));
+      fireEvent.contextMenu(screen.getByTestId('explorer-folder-subfolder'));
+      fireEvent.click(screen.getByTestId('explorer-context-open-terminal'));
+
+      await waitFor(() => screen.getByTestId('terminal-tab-13'));
+      expect((window as any).electronAPI.ptyCreate).toHaveBeenCalledWith({
+        cwd: folderPath,
+        cols: 80,
+        rows: 24,
+      });
+    });
+
     it('collapses a double trigger (menu accelerator + keydown) into one toggle', async () => {
       await renderApp();
       now = 50_000;

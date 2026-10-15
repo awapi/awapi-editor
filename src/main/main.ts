@@ -8,7 +8,15 @@ import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { checkForUpdates } from './updater';
 import { ZOOM_STEP, adjustZoom, resetZoom, clearZoomState } from './zoom';
-import { GO_TO_LINE_ACCELERATOR, SHORTCUTS_REFERENCE_ACCELERATOR } from './shortcuts';
+import { GO_TO_LINE_ACCELERATOR, SHORTCUTS_REFERENCE_ACCELERATOR, TOGGLE_EXPLORER_ACCELERATOR } from './shortcuts';
+import {
+  listDirectoryEntries,
+  deleteExplorerPath,
+  createExplorerFile,
+  createExplorerFolder,
+  syncWatchedDirs,
+  clearAllWatchedDirs,
+} from './explorer';
 import { parseReadFileOptions } from './readFileOptions';
 import { openExternalTerminal, resolveTerminalCwd, type ExternalTerminalDeps } from './externalTerminal';
 import { getTerminalChoices, resolveShell } from './terminalDetection';
@@ -188,6 +196,7 @@ function createWindow() {
     }
     watchRegistry.clear();
     clearAllWatchedFiles();
+    clearAllWatchedDirs();
     for (const winId of popoutWindowIds) {
       const win = BrowserWindow.fromId(winId);
       win?.destroy();
@@ -371,6 +380,62 @@ ipcMain.handle('settings:openDirDialog', async (event) => {
 
 ipcMain.handle('settings:openInExplorer', async (_, dirPath: string) => {
   await shell.openPath(dirPath);
+});
+
+// ── File Explorer Sidebar IPC ────────────────────────────────────────────────
+ipcMain.handle('explorer:openFolderDialog', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (!win) return null;
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    properties: ['openDirectory'],
+    title: 'Open Folder in Explorer',
+  });
+  if (canceled || filePaths.length === 0) return null;
+  return filePaths[0];
+});
+
+ipcMain.handle('explorer:readDir', async (_, dirPath: string) => {
+  return listDirectoryEntries(dirPath);
+});
+
+ipcMain.handle('explorer:deletePath', async (_, targetPath: string) => {
+  const res = deleteExplorerPath(targetPath);
+  if (res.ok && typeof targetPath === 'string' && targetPath) {
+    removeRecentFile(targetPath);
+    rebuildAppMenu();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('explorer:dirChanged', dirname(targetPath));
+    }
+  }
+  return res;
+});
+
+ipcMain.handle('explorer:createFile', async (_, parentDirPath: string, name: string) => {
+  const res = createExplorerFile(parentDirPath, name);
+  if (res.ok && typeof parentDirPath === 'string' && parentDirPath) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('explorer:dirChanged', parentDirPath);
+    }
+  }
+  return res;
+});
+
+ipcMain.handle('explorer:createFolder', async (_, parentDirPath: string, name: string) => {
+  const res = createExplorerFolder(parentDirPath, name);
+  if (res.ok && typeof parentDirPath === 'string' && parentDirPath) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('explorer:dirChanged', parentDirPath);
+    }
+  }
+  return res;
+});
+
+ipcMain.handle('explorer:watchDirs', async (_, dirPaths: unknown) => {
+  syncWatchedDirs(dirPaths, (changedDirPath) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('explorer:dirChanged', changedDirPath);
+    }
+  });
 });
 
 // ── Windows Explorer Context Menu ────────────────────────────────────────────
@@ -739,6 +804,9 @@ ipcMain.handle(
     refreshWatchedFile(targetPath);
     addRecentFile(targetPath);
     rebuildAppMenu();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('explorer:dirChanged', dirname(targetPath));
+    }
     return targetPath;
   },
 );
@@ -785,9 +853,20 @@ ipcMain.handle('file:rename', async (_event, oldPath: string, newName: string) =
     markSelfSaved(oldPath);
     markSelfSaved(newPath);
     fs.renameSync(oldPath, newPath);
-    removeRecentFile(oldPath);
-    addRecentFile(newPath);
-    rebuildAppMenu();
+    let isDir = false;
+    try {
+      isDir = fs.statSync(newPath).isDirectory();
+    } catch {
+      isDir = false;
+    }
+    if (!isDir) {
+      removeRecentFile(oldPath);
+      addRecentFile(newPath);
+      rebuildAppMenu();
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('explorer:dirChanged', dir);
+    }
     return { ok: true as const, newPath };
   } catch (err) {
     return { ok: false as const, error: (err as Error).message };
@@ -1146,6 +1225,7 @@ function rebuildAppMenu(): void {
       submenu: [
         { label: 'New', accelerator: 'CmdOrCtrl+N', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:new') },
         { label: 'Open', accelerator: 'CmdOrCtrl+O', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:open') },
+        { label: 'Open Folder…', click: () => mainWindow?.webContents.send('menu:openFolder') },
         { label: 'Open Recent', submenu: buildRecentFilesSubmenu() },
         { label: 'Save', accelerator: 'CmdOrCtrl+S', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:save') },
         { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:saveAs') },
@@ -1251,6 +1331,11 @@ function rebuildAppMenu(): void {
         },
         { type: 'separator' },
         {
+          label: 'Toggle File Explorer',
+          accelerator: TOGGLE_EXPLORER_ACCELERATOR,
+          click: () => mainWindow?.webContents.send('menu:toggleExplorer'),
+        },
+        {
           label: 'Toggle Terminal',
           accelerator: 'Ctrl+`',
           // Windows/Linux: the renderer handles Ctrl+` itself (so it works while
@@ -1282,6 +1367,10 @@ function rebuildAppMenu(): void {
     {
       role: 'help',
       submenu: [
+        {
+          label: 'Getting Started & Help…',
+          click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:openHelp'),
+        },
         {
           label: 'Keyboard Shortcuts…',
           accelerator: SHORTCUTS_REFERENCE_ACCELERATOR,

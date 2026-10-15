@@ -59,6 +59,7 @@ AwapiEditor is designed around a simple philosophy: **deliver the speed, reliabi
 - **Line & Text Operations (`Edit -> Line & Text Operations`):** Sort lines ascending/descending, remove duplicate lines, remove empty lines, trim trailing whitespace, and convert selection/document to `UPPERCASE` or `lowercase`. The document's final newline stays at the end.
 - **Word Wrap & Whitespace/EOL Toggles:** Quick toolbar and `View` menu toggles for Word Wrap and Show Whitespace & EOL (`¶`).
 - **Per-Window Zoom:** Zoom In (`Cmd/Ctrl+=` or `Cmd/Ctrl++`), Zoom Out (`Cmd/Ctrl+-`), and Reset Zoom (`Cmd/Ctrl+0`), tracked independently per window.
+- **Getting Started & Quick Guide:** Built-in `Help -> Getting Started & Help…` modal (and `?` button in the top-right toolbar) with a high-level overview of opening files, drag & drop, the `awed` CLI command, tabs, split/diff views, CSV grid editing, and terminals.
 - **Keyboard Shortcuts Reference (`Shift+F1`):** Built-in `Help -> Keyboard Shortcuts…` cheat-sheet modal plus hover tooltips on tab controls. (`Cmd/Ctrl+/` is left to Monaco's *Toggle Line Comment*.)
 - **Live Status Bar Metrics:** Displays cursor position (`Ln`, `Col`), selection summary (`Sel lines, chars`), total character count (`Chars`), line ending, and language, plus a terminal button that toggles the [integrated terminal](#terminal).
 - **Themes:** Global Dark and Light themes (synced with the native OS title bar) configurable in **Preferences** (`Cmd/Ctrl+,`).

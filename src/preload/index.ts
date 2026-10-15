@@ -36,6 +36,30 @@ export const electronAPI = {
   getDefaultSessionDir: () => ipcRenderer.invoke('settings:getDefaultDir'),
   openDirDialog: () => ipcRenderer.invoke('settings:openDirDialog'),
   openInExplorer: (dirPath: string) => ipcRenderer.invoke('settings:openInExplorer', dirPath),
+  openExplorerFolderDialog: () => ipcRenderer.invoke('explorer:openFolderDialog') as Promise<string | null>,
+  readDirectory: (dirPath: string) =>
+    ipcRenderer.invoke('explorer:readDir', dirPath) as Promise<
+      | { ok: true; dirPath: string; name: string; entries: Array<{ name: string; path: string; isDirectory: boolean }> }
+      | { ok: false; error: string }
+    >,
+  deletePath: (targetPath: string) =>
+    ipcRenderer.invoke('explorer:deletePath', targetPath) as Promise<{ ok: true } | { ok: false; error: string }>,
+  createFile: (parentDirPath: string, name: string) =>
+    ipcRenderer.invoke('explorer:createFile', parentDirPath, name) as Promise<
+      { ok: true; path: string } | { ok: false; error: string }
+    >,
+  createFolder: (parentDirPath: string, name: string) =>
+    ipcRenderer.invoke('explorer:createFolder', parentDirPath, name) as Promise<
+      { ok: true; path: string } | { ok: false; error: string }
+    >,
+  syncWatchedDirs: (dirPaths: string[]) => ipcRenderer.invoke('explorer:watchDirs', dirPaths) as Promise<void>,
+  onExplorerDirChanged: (callback: (dirPath: string) => void) => {
+    const listener = (_: unknown, dirPath: string) => callback(dirPath);
+    ipcRenderer.on('explorer:dirChanged', listener);
+    return () => {
+      ipcRenderer.removeListener('explorer:dirChanged', listener);
+    };
+  },
   getContextMenuStatus: () =>
     ipcRenderer.invoke('contextMenu:getStatus') as Promise<{ supported: boolean; enabled: boolean }>,
   setContextMenuEnabled: (enable: boolean) =>
@@ -101,6 +125,7 @@ export const electronAPI = {
     ipcRenderer.on('file:externalDelete', (_, data) => callback(data)),
   onNewFile: (callback: () => void) => ipcRenderer.on('menu:new', () => callback()),
   onOpenFile: (callback: () => void) => ipcRenderer.on('menu:open', () => callback()),
+  onOpenFolder: (callback: () => void) => ipcRenderer.on('menu:openFolder', () => callback()),
   onSaveFile: (callback: () => void) => ipcRenderer.on('menu:save', () => callback()),
   onSaveAsFile: (callback: () => void) => ipcRenderer.on('menu:saveAs', () => callback()),
   onSaveAllFiles: (callback: () => void) => ipcRenderer.on('menu:saveAll', () => callback()),
@@ -111,6 +136,7 @@ export const electronAPI = {
   onFindInTabs: (callback: () => void) => ipcRenderer.on('menu:findInTabs', () => callback()),
   onGoToLine: (callback: () => void) => ipcRenderer.on('menu:goToLine', () => callback()),
   onToggleWhitespace: (callback: () => void) => ipcRenderer.on('menu:toggleWhitespace', () => callback()),
+  onToggleExplorer: (callback: () => void) => ipcRenderer.on('menu:toggleExplorer', () => callback()),
   onToggleSplitView: (callback: () => void) => ipcRenderer.on('menu:toggleSplitView', () => callback()),
   onToggleTerminal: (callback: () => void) => ipcRenderer.on('menu:toggleTerminal', () => callback()),
   onNewTerminal: (callback: () => void) => ipcRenderer.on('menu:newTerminal', () => callback()),
@@ -133,6 +159,7 @@ export const electronAPI = {
   onPrintPreview: (callback: () => void) => ipcRenderer.on('menu:printPreview', () => callback()),
   onOpenSettings: (callback: () => void) => ipcRenderer.on('menu:openSettings', () => callback()),
   onOpenShortcuts: (callback: () => void) => ipcRenderer.on('menu:openShortcuts', () => callback()),
+  onOpenHelp: (callback: () => void) => ipcRenderer.on('menu:openHelp', () => callback()),
   onShowAllCommands: (callback: () => void) => ipcRenderer.on('menu:showAllCommands', () => callback()),
   onOpenFileFromArgs: (callback: (filePath: string) => void) => ipcRenderer.on('file:openFromArgs', (_, filePath) => callback(filePath)),
   printPreview: (content: string, language: string, title: string) =>
@@ -153,6 +180,7 @@ export const electronAPI = {
   removeListeners: () => {
     ipcRenderer.removeAllListeners('menu:new');
     ipcRenderer.removeAllListeners('menu:open');
+    ipcRenderer.removeAllListeners('menu:openFolder');
     ipcRenderer.removeAllListeners('menu:save');
     ipcRenderer.removeAllListeners('menu:saveAs');
     ipcRenderer.removeAllListeners('menu:saveAll');
@@ -165,6 +193,7 @@ export const electronAPI = {
     ipcRenderer.removeAllListeners('menu:findInTabs');
     ipcRenderer.removeAllListeners('menu:goToLine');
     ipcRenderer.removeAllListeners('menu:toggleWhitespace');
+    ipcRenderer.removeAllListeners('menu:toggleExplorer');
     ipcRenderer.removeAllListeners('menu:toggleSplitView');
     ipcRenderer.removeAllListeners('menu:toggleDiffView');
     ipcRenderer.removeAllListeners('window:alwaysOnTopChanged');
@@ -175,6 +204,7 @@ export const electronAPI = {
     ipcRenderer.removeAllListeners('menu:printPreview');
     ipcRenderer.removeAllListeners('menu:openSettings');
     ipcRenderer.removeAllListeners('menu:openShortcuts');
+    ipcRenderer.removeAllListeners('menu:openHelp');
     ipcRenderer.removeAllListeners('menu:showAllCommands');
     ipcRenderer.removeAllListeners('file:openFromArgs');
     ipcRenderer.removeAllListeners('menu:popoutActiveTab');

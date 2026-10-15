@@ -8,6 +8,7 @@ import LineEndingSelector from './LineEndingSelector';
 import EncodingSelector from './EncodingSelector';
 import SettingsModal from './SettingsModal';
 import ShortcutsModal from './ShortcutsModal';
+import HelpModal from './HelpModal';
 import GoToLineModal from './GoToLineModal';
 import FindInTabsPanel, { type TabSearchMatch } from './FindInTabsPanel';
 import { applyTextOperation, type TextOperationKind } from './textOperations';
@@ -25,6 +26,7 @@ import CsvGridEditor from './CsvGridEditor';
 import TerminalPanel from './TerminalPanel';
 import { useTerminalSessions } from './useTerminalSessions';
 import { isNewTerminalShortcut, isToggleTerminalShortcut } from './terminalKeys';
+import FileExplorer, { getParentDirPath, normalizePathForCompare } from './FileExplorer';
 
 /** True when this window was opened via "Pop out to new window" (single-file view). */
 const isPopoutMode = typeof window !== 'undefined' && window.location.hash === '#popout';
@@ -55,6 +57,8 @@ interface Tab {
   themeOverride?: 'light' | 'dark';
   /** For CSV/TSV tabs: whether to render the spreadsheet grid ('grid', default) or raw text ('text'). */
   csvViewMode?: 'grid' | 'text';
+  /** True when opened via a single-click in the File Explorer (italic title; replaced by the next single-clicked file until pinned). */
+  isPreview?: boolean;
 }
 
 const App: React.FC = () => {
@@ -68,8 +72,13 @@ const App: React.FC = () => {
   const [showWhitespace, setShowWhitespace] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isGoToLineOpen, setIsGoToLineOpen] = useState(false);
   const [isFindInTabsOpen, setIsFindInTabsOpen] = useState(false);
+  const [isExplorerOpen, setIsExplorerOpen] = useState(false);
+  const [explorerFolderPath, setExplorerFolderPath] = useState<string | null>(null);
+  const [explorerRefreshToken, setExplorerRefreshToken] = useState(0);
+  const explorerSettingsReadyRef = React.useRef(false);
   const [tabContextMenu, setTabContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
   const [closedTabs, setClosedTabs] = useState<Tab[]>([]);
   const [renameTarget, setRenameTarget] = useState<{ tabId: string; currentName: string } | null>(null);
@@ -271,6 +280,160 @@ const App: React.FC = () => {
     (window as any).electronAPI?.setWindowDirty?.(popoutIsDirty);
   }, [popoutIsDirty]);
 
+  // Persist File Explorer visibility and folder path once initial settings have loaded
+  useEffect(() => {
+    if (isPopoutMode || !explorerSettingsReadyRef.current) return;
+    const w = window as any;
+    w.electronAPI?.saveSettings?.({
+      explorerVisible: isExplorerOpen,
+      explorerFolderPath,
+    });
+  }, [isExplorerOpen, explorerFolderPath]);
+
+  const handlePickExplorerFolder = React.useCallback(async () => {
+    const w = window as any;
+    if (!w.electronAPI?.openExplorerFolderDialog) return;
+    try {
+      const selected = await w.electronAPI.openExplorerFolderDialog();
+      if (selected) {
+        setExplorerFolderPath(selected);
+        setIsExplorerOpen(true);
+      }
+    } catch (err) {
+      console.error('Failed to open folder in Explorer:', err);
+    }
+  }, []);
+
+  const pinTab = React.useCallback((tabId: string) => {
+    setTabs(prev =>
+      prev.map(t => (t.id === tabId && t.isPreview ? { ...t, isPreview: false } : t)),
+    );
+  }, []);
+
+  const handleOpenFileFromExplorer = React.useCallback(
+    async (filePath: string, options?: { preview?: boolean }) => {
+      const wantPreview = options?.preview ?? true;
+      const normTarget = normalizePathForCompare(filePath);
+      const existingTab = tabsRef.current.find(
+        t => t.filePath && normalizePathForCompare(t.filePath) === normTarget,
+      );
+      if (existingTab) {
+        if (!wantPreview && existingTab.isPreview) {
+          pinTab(existingTab.id);
+        }
+        setActiveTabId(existingTab.id);
+        return;
+      }
+
+      const w = window as any;
+      if (!w.electronAPI?.readFile) return;
+      try {
+        const result = await w.electronAPI.readFile(filePath, { trackRecent: true });
+        if (!result) return;
+        const normResultPath = normalizePathForCompare(result.filePath);
+        const postAwaitExisting = tabsRef.current.find(
+          t => t.filePath && normalizePathForCompare(t.filePath) === normResultPath,
+        );
+        if (postAwaitExisting) {
+          if (!wantPreview && postAwaitExisting.isPreview) {
+            pinTab(postAwaitExisting.id);
+          }
+          setActiveTabId(postAwaitExisting.id);
+          return;
+        }
+        const fileName = result.filePath.split(/[\\/]/).pop() || result.filePath;
+        const existingPreview = wantPreview
+          ? tabsRef.current.find(t => t.isPreview && !t.isDirty)
+          : undefined;
+
+        if (existingPreview) {
+          const targetId = existingPreview.id;
+          setTabs(prev =>
+            prev.map(t =>
+              t.id === targetId
+                ? {
+                    id: targetId,
+                    title: fileName,
+                    filePath: result.filePath,
+                    content: result.content,
+                    isDirty: false,
+                    savedContent: result.content,
+                    eol: result.eol ?? 'LF',
+                    encoding: result.encoding ?? DEFAULT_ENCODING,
+                    isPreview: true,
+                  }
+                : t,
+            ),
+          );
+          setActiveTabId(targetId);
+          return;
+        }
+
+        const id = `tab-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        setTabs(prev => [
+          ...prev,
+          {
+            id,
+            title: fileName,
+            filePath: result.filePath,
+            content: result.content,
+            isDirty: false,
+            savedContent: result.content,
+            eol: result.eol ?? 'LF',
+            encoding: result.encoding ?? DEFAULT_ENCODING,
+            isPreview: wantPreview,
+          },
+        ]);
+        setActiveTabId(id);
+      } catch (err) {
+        console.error('Failed to open file from Explorer:', err);
+      }
+    },
+    [pinTab],
+  );
+
+  const handleExplorerItemRenamed = React.useCallback(
+    (oldPath: string, newPath: string, newName: string, isDirectory: boolean) => {
+      const normOld = normalizePathForCompare(oldPath);
+      setTabs(prev =>
+        prev.map(t => {
+          if (!t.filePath) return t;
+          const normTab = normalizePathForCompare(t.filePath);
+          if (!isDirectory && normTab === normOld) {
+            return { ...t, title: newName, filePath: newPath };
+          }
+          if (isDirectory && normTab.startsWith(normOld + '/')) {
+            const sep = newPath.includes('\\') ? '\\' : '/';
+            const suffix = normTab.slice(normOld.length).replace(/\//g, sep);
+            return { ...t, filePath: newPath + suffix };
+          }
+          return t;
+        }),
+      );
+    },
+    [],
+  );
+
+  const handleExplorerItemDeleted = React.useCallback(
+    (deletedPath: string, isDirectory: boolean) => {
+      const normDeleted = normalizePathForCompare(deletedPath);
+      setTabs(prev =>
+        prev.map(t => {
+          if (!t.filePath) return t;
+          const normTab = normalizePathForCompare(t.filePath);
+          if (
+            (!isDirectory && normTab === normDeleted) ||
+            (isDirectory && normTab.startsWith(normDeleted + '/'))
+          ) {
+            return { ...t, isDirty: true, savedContent: undefined };
+          }
+          return t;
+        }),
+      );
+    },
+    [],
+  );
+
   useEffect(() => {
     // Session restore is a one-shot operation: guard it so React StrictMode's
     // double-invoke in development doesn't create duplicate tabs. Listener
@@ -343,6 +506,24 @@ const App: React.FC = () => {
         if (!sessionRestored) {
           addNewTab();
         }
+
+        // Restore persisted File Explorer folder and visibility from settings
+        if (w.electronAPI?.loadSettings) {
+          try {
+            const settings = await w.electronAPI.loadSettings();
+            if (settings) {
+              if (typeof settings.explorerFolderPath === 'string' && settings.explorerFolderPath) {
+                setExplorerFolderPath(settings.explorerFolderPath);
+              }
+              if (typeof settings.explorerVisible === 'boolean') {
+                setIsExplorerOpen(settings.explorerVisible);
+              }
+            }
+          } catch {
+            // ignore settings load error
+          }
+        }
+        explorerSettingsReadyRef.current = true;
       })();
       } // end else (non-popout)
     }
@@ -414,6 +595,7 @@ const App: React.FC = () => {
                 ? { ...t, ...savedContentPatch(currentTab, savedContent), filePath: savedPath, title: fileName, isDirty: false, savedContent }
                 : t
             ));
+            setExplorerRefreshToken(n => n + 1);
           }
         } catch(e) { console.error('Error saving file', e); }
       });
@@ -434,6 +616,7 @@ const App: React.FC = () => {
                 ? { ...t, ...savedContentPatch(currentTab, savedContent), filePath: savedPath, title: fileName, isDirty: false, savedContent }
                 : t
             ));
+            setExplorerRefreshToken(n => n + 1);
           }
         } catch(e) { console.error('Error saving file', e); }
       });
@@ -452,6 +635,7 @@ const App: React.FC = () => {
                   ? { ...t, ...savedContentPatch(tab, savedContent), filePath: savedPath, title: fileName, isDirty: false, savedContent }
                   : t
               ));
+              setExplorerRefreshToken(n => n + 1);
             }
           } catch (e) {
             console.error('Error saving file during Save All', e);
@@ -569,6 +753,18 @@ const App: React.FC = () => {
         setShowWhitespace(prev => !prev);
       });
 
+      w.electronAPI.onToggleExplorer?.(() => {
+        if (!isPopoutMode) {
+          setIsExplorerOpen(prev => !prev);
+        }
+      });
+
+      w.electronAPI.onOpenFolder?.(() => {
+        if (!isPopoutMode) {
+          void handlePickExplorerFolder();
+        }
+      });
+
       w.electronAPI.onToggleTerminal?.(() => {
         toggleTerminalRef.current();
       });
@@ -651,6 +847,10 @@ const App: React.FC = () => {
 
       w.electronAPI.onOpenShortcuts?.(() => {
         setIsShortcutsOpen(true);
+      });
+
+      w.electronAPI.onOpenHelp?.(() => {
+        setIsHelpOpen(true);
       });
 
       w.electronAPI.onShowAllCommands(() => {
@@ -740,24 +940,44 @@ const App: React.FC = () => {
         if (!e.dataTransfer || !e.dataTransfer.types.includes('Files')) return;
         e.preventDefault();
         e.stopPropagation();
-        
-        for (let i = 0; i < e.dataTransfer.files.length; i++) {
-          const file = e.dataTransfer.files[i];
+
+        // Snapshot the dropped File objects synchronously before any `await`,
+        // because the browser clears `e.dataTransfer.files` once the synchronous
+        // drop event dispatch finishes.
+        const droppedFiles = Array.from(e.dataTransfer.files);
+        if (droppedFiles.length === 0) return;
+
+        const newTabsToAdd: Tab[] = [];
+        let lastTargetId: string | null = null;
+        const now = Date.now();
+
+        for (let i = 0; i < droppedFiles.length; i++) {
+          const file = droppedFiles[i];
           try {
             const filePath = w.electronAPI.getPathForFile(file);
             if (!filePath) continue;
 
-            const existingTab = tabsRef.current.find((t: Tab) => t.filePath === filePath);
+            const existingTab =
+              tabsRef.current.find((t: Tab) => t.filePath === filePath) ??
+              newTabsToAdd.find((t: Tab) => t.filePath === filePath);
             if (existingTab) {
-              setActiveTabId(existingTab.id);
+              lastTargetId = existingTab.id;
               continue;
             }
 
             const result = await w.electronAPI.readFile(filePath, { trackRecent: true });
             if (result) {
-              const fileName = file.name || result.filePath.split(/[\\/]/).pop();
-              const id = `tab-${Date.now()}-${i}`;
-              setTabs(prev => [...prev, {
+              const postAwaitExisting =
+                tabsRef.current.find((t: Tab) => t.filePath === result.filePath) ??
+                newTabsToAdd.find((t: Tab) => t.filePath === result.filePath);
+              if (postAwaitExisting) {
+                lastTargetId = postAwaitExisting.id;
+                continue;
+              }
+
+              const fileName = file.name || result.filePath.split(/[\\/]/).pop() || result.filePath;
+              const id = `tab-${now}-${i}`;
+              newTabsToAdd.push({
                 id,
                 title: fileName,
                 filePath: result.filePath,
@@ -766,12 +986,23 @@ const App: React.FC = () => {
                 savedContent: result.content,
                 eol: result.eol,
                 encoding: result.encoding ?? DEFAULT_ENCODING,
-              }]);
-              setActiveTabId(id);
+              });
+              lastTargetId = id;
             }
           } catch (err) {
             console.error('Failed to open dropped file', err);
           }
+        }
+
+        if (newTabsToAdd.length > 0) {
+          setTabs(prev => {
+            const existingPaths = new Set(prev.map(t => t.filePath).filter(Boolean));
+            const uniqueNewTabs = newTabsToAdd.filter(t => !t.filePath || !existingPaths.has(t.filePath));
+            return uniqueNewTabs.length > 0 ? [...prev, ...uniqueNewTabs] : prev;
+          });
+        }
+        if (lastTargetId) {
+          setActiveTabId(lastTargetId);
         }
       };
 
@@ -796,7 +1027,7 @@ const App: React.FC = () => {
     setTabs(prev => prev.map(t => {
       if (t.id !== activeTabId) return t;
       const isDirty = t.savedContent === undefined ? true : value !== t.savedContent;
-      return { ...t, content: value, isDirty };
+      return { ...t, content: value, isDirty, isPreview: false };
     }));
   };
 
@@ -1023,6 +1254,16 @@ const App: React.FC = () => {
     await w.electronAPI?.showItemInFolder?.(tab.filePath);
   };
 
+  const handleOpenTabFolderInExplorer = (tabId: string) => {
+    setTabContextMenu(null);
+    const tab = tabsRef.current.find(t => t.id === tabId);
+    if (!tab?.filePath) return;
+    const dir = getParentDirPath(tab.filePath);
+    if (!dir) return;
+    setExplorerFolderPath(dir);
+    setIsExplorerOpen(true);
+  };
+
   // Terminals open in the file's folder, or the home folder for unsaved tabs.
   const handleOpenInExternalTerminal = async (tabId: string) => {
     setTabContextMenu(null);
@@ -1086,6 +1327,7 @@ const App: React.FC = () => {
           : t
       )
     );
+    setExplorerRefreshToken(n => n + 1);
     closeRenameModal();
   };
 
@@ -1276,7 +1518,7 @@ const App: React.FC = () => {
       prev.map(t => {
         if (t.id !== tabId || t.content === value) return t;
         const isDirty = t.savedContent === undefined ? true : value !== t.savedContent;
-        return { ...t, content: value, isDirty };
+        return { ...t, content: value, isDirty, isPreview: false };
       }),
     );
   };
@@ -1504,6 +1746,7 @@ const App: React.FC = () => {
               onDragOver={handleDragOver}
               onDrop={(e) => handleDrop(e, index)}
               onClick={() => setActiveTabId(tab.id)}
+              onDoubleClick={() => pinTab(tab.id)}
               onAuxClick={(e) => { if (e.button === 1) closeTab(e, tab.id); }}
               onContextMenu={(e) => { e.preventDefault(); setTabContextMenu({ tabId: tab.id, x: e.clientX, y: e.clientY }); }}
               style={{
@@ -1520,7 +1763,17 @@ const App: React.FC = () => {
                 color: tab.isDirty ? dirtyColor : surfaceFgFor(tab.themeOverride)
               }}
             >
-              <span style={{ flexGrow: 1, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', fontSize: '13px' }}>
+              <span
+                data-testid={`tab-title-${tab.id}`}
+                style={{
+                  flexGrow: 1,
+                  whiteSpace: 'nowrap',
+                  textOverflow: 'ellipsis',
+                  overflow: 'hidden',
+                  fontSize: '13px',
+                  fontStyle: tab.isPreview ? 'italic' : 'normal',
+                }}
+              >
                 {tab.title} {tab.isDirty && '*'}
               </span>
               <span
@@ -1559,6 +1812,43 @@ const App: React.FC = () => {
         </div>
         {/* Action group: pinned to the right, never scrolls with tabs. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', paddingRight: '8px', flexShrink: 0 }}>
+          <button
+            data-testid="explorer-toggle"
+            aria-label={isExplorerOpen ? 'Hide File Explorer' : 'Show File Explorer'}
+            aria-pressed={isExplorerOpen}
+            onClick={() => setIsExplorerOpen(prev => !prev)}
+            title={isExplorerOpen ? 'Hide File Explorer (Cmd/Ctrl+B)' : 'Show File Explorer (Cmd/Ctrl+B)'}
+            style={{
+              width: '28px',
+              height: '24px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              cursor: 'pointer',
+              borderRadius: '4px',
+              border: `1px solid ${colors.tabHover}`,
+              backgroundColor: isExplorerOpen ? colors.tabActiveBackground : colors.tabBackground,
+              color: colors.foreground,
+              opacity: isExplorerOpen ? 1 : 0.55,
+            }}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <rect x="2" y="2.5" width="12" height="11" rx="1.5" />
+              <line x1="6" y1="2.5" x2="6" y2="13.5" />
+            </svg>
+          </button>
           <button
             data-testid="always-on-top-toggle"
             aria-label={alwaysOnTop ? 'Unpin Window (Disable Always on Top)' : 'Pin Window (Always on Top)'}
@@ -1762,6 +2052,32 @@ const App: React.FC = () => {
               <line x1="2" y1="12.5" x2="5" y2="12.5" />
             </svg>
           </button>
+          <button
+            data-testid="help-toggle"
+            aria-label={isHelpOpen ? 'Close Getting Started & Help' : 'Getting Started & Help'}
+            aria-pressed={isHelpOpen}
+            onClick={() => setIsHelpOpen(prev => !prev)}
+            title="Getting Started & Help"
+            style={{
+              width: '28px',
+              height: '24px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              cursor: 'pointer',
+              borderRadius: '4px',
+              border: `1px solid ${colors.tabHover}`,
+              backgroundColor: isHelpOpen ? colors.tabActiveBackground : colors.tabBackground,
+              color: colors.foreground,
+              opacity: isHelpOpen ? 1 : 0.55,
+              fontSize: '12px',
+              fontWeight: 700,
+              fontFamily: 'monospace',
+            }}
+          >
+            ?
+          </button>
         </div>
       </div>
       )} {/* end !isPopoutMode tab bar */}
@@ -1921,8 +2237,29 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* Workspace Row: File Explorer Sidebar + Editor Area */}
+      <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, overflow: 'hidden' }}>
+      {!isPopoutMode && (
+        <FileExplorer
+          isOpen={isExplorerOpen}
+          rootFolderPath={explorerFolderPath}
+          tabs={tabs}
+          activeTabId={activeTabId}
+          onSelectTab={setActiveTabId}
+          onPinTab={pinTab}
+          onCloseTab={closeTab}
+          onOpenFileFromTree={handleOpenFileFromExplorer}
+          onPickFolder={() => { void handlePickExplorerFolder(); }}
+          onCloseExplorer={() => setIsExplorerOpen(false)}
+          onChangeRootFolder={setExplorerFolderPath}
+          onItemRenamed={handleExplorerItemRenamed}
+          onItemDeleted={handleExplorerItemDeleted}
+          refreshToken={explorerRefreshToken}
+        />
+      )}
+
       {/* Editor Area */}
-      <div style={{ flexGrow: 1, overflow: 'hidden', backgroundColor: activeTab ? surfaceBgFor(activeTab.themeOverride) : undefined }}>
+      <div style={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', backgroundColor: activeTab ? surfaceBgFor(activeTab.themeOverride) : undefined }}>
         {activeTab ? (
           !isPopoutMode && viewMode === 'split' && secondaryTab ? (
             <div
@@ -2095,6 +2432,7 @@ const App: React.FC = () => {
           </div>
         )}
       </div>
+      </div>{/* end Workspace Row */}
 
       {!isPopoutMode && (
         <FindInTabsPanel
@@ -2110,6 +2448,12 @@ const App: React.FC = () => {
 
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
       <ShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
+      <HelpModal
+        isOpen={isHelpOpen}
+        onClose={() => setIsHelpOpen(false)}
+        onOpenShortcuts={() => setIsShortcutsOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+      />
       <GoToLineModal
         isOpen={isGoToLineOpen}
         currentLine={cursorPosition.line}
@@ -2255,6 +2599,25 @@ const App: React.FC = () => {
                     }}
                   >
                     Copy Filename
+                  </div>
+                  <div
+                    role="menuitem"
+                    aria-disabled={!hasFilePath}
+                    data-testid="tab-context-open-folder-in-explorer"
+                    onClick={() => { if (hasFilePath) handleOpenTabFolderInExplorer(tabContextMenu.tabId); }}
+                    onMouseEnter={e => { if (hasFilePath) (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                    style={{
+                      padding: '7px 16px',
+                      cursor: hasFilePath ? 'pointer' : 'not-allowed',
+                      fontSize: '13px',
+                      color: colors.foreground,
+                      opacity: hasFilePath ? 1 : 0.45,
+                      backgroundColor: 'transparent',
+                    }}
+                    title={hasFilePath ? undefined : 'Save the file before opening its folder in File Explorer'}
+                  >
+                    Open Folder in File Explorer
                   </div>
                   <div
                     role="menuitem"

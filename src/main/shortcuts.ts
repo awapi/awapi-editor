@@ -12,6 +12,9 @@ export const GO_TO_LINE_ACCELERATOR = 'Ctrl+G';
 /** Keyboard Shortcuts reference. Pairs with F1 (Command Palette). */
 export const SHORTCUTS_REFERENCE_ACCELERATOR = 'Shift+F1';
 
+/** Toggle File Explorer sidebar. Matches VS Code's sidebar toggle. */
+export const TOGGLE_EXPLORER_ACCELERATOR = 'CmdOrCtrl+B';
+
 /**
  * Monaco editor keybindings that app menu accelerators must never use,
  * expressed as Electron accelerator strings.

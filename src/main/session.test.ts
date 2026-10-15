@@ -109,4 +109,11 @@ describe('session settings and recent files', () => {
     expect(loaded.theme).toBe('light');
     expect(loaded.recentFiles).toEqual(['/tmp/keep-me.txt']);
   });
+
+  it('persists and restores explorerFolderPath and explorerVisible in settings', () => {
+    saveAppSettings({ explorerFolderPath: '/workspace/project', explorerVisible: true });
+    const loaded = loadAppSettings();
+    expect(loaded.explorerFolderPath).toBe('/workspace/project');
+    expect(loaded.explorerVisible).toBe(true);
+  });
 });

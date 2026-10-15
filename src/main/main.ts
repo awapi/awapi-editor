@@ -1,14 +1,39 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard, webContents } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme, clipboard, webContents, protocol, net } from 'electron';
 
 // Set app name BEFORE any imports that use app.getPath()
 app.name = 'AwapiEditor';
 
+// Register a privileged scheme so the Markdown preview window can load local
+// relative images (`awapi-asset://local/...`) even when the renderer runs on
+// http://localhost in dev mode (where Chromium blocks `file://` subresources).
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'awapi-asset',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  },
+]);
+
 import { dirname, isAbsolute, join } from 'path';
+import { pathToFileURL } from 'url';
 import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { checkForUpdates } from './updater';
 import { ZOOM_STEP, adjustZoom, resetZoom, clearZoomState } from './zoom';
-import { GO_TO_LINE_ACCELERATOR, SHORTCUTS_REFERENCE_ACCELERATOR, TOGGLE_EXPLORER_ACCELERATOR } from './shortcuts';
+import {
+  GO_TO_LINE_ACCELERATOR,
+  SHORTCUTS_REFERENCE_ACCELERATOR,
+  TOGGLE_EXPLORER_ACCELERATOR,
+  MARKDOWN_PREVIEW_ACCELERATOR,
+} from './shortcuts';
+import {
+  createMarkdownPreviewManager,
+  type MarkdownPreviewData,
+} from './markdownPreviewManager';
 import {
   listDirectoryEntries,
   deleteExplorerPath,
@@ -240,11 +265,34 @@ function createWindow() {
       const win = BrowserWindow.fromId(winId);
       win?.destroy();
     }
+    const previewWinId = markdownPreviewManager.getWindowId();
+    if (previewWinId !== null) {
+      BrowserWindow.fromId(previewWinId)?.destroy();
+      markdownPreviewManager.clear();
+    }
   });
   // On macOS the app outlives its windows; drop the destroyed window so menu
   // rebuilds (e.g. Clear Recent) don't touch it.
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+
+  // When the Markdown preview popup is magnetically docked to the main window's
+  // right edge, moving or resizing the main window moves the preview along with it.
+  mainWindow.on('move', () => {
+    syncDockedMarkdownPreviewToMain();
+  });
+  mainWindow.on('resize', () => {
+    syncDockedMarkdownPreviewToMain();
+  });
+  // When the user clicks back on the main editor window (after another app like
+  // VS Code was covering the preview), raise the preview window to the front too
+  // while keeping keyboard focus in the main editor.
+  mainWindow.on('focus', () => {
+    bringMarkdownPreviewToFront();
+  });
+  mainWindow.on('restore', () => {
+    bringMarkdownPreviewToFront();
   });
 
   // Handle Ctrl++ (Ctrl+Shift+=) for zoom in — the menu only registers Ctrl+=.
@@ -268,6 +316,19 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  protocol.handle('awapi-asset', (request) => {
+    try {
+      const parsed = new URL(request.url);
+      let filePath = decodeURIComponent(parsed.pathname);
+      if (process.platform === 'win32' && /^\/[a-zA-Z]:\//.test(filePath)) {
+        filePath = filePath.slice(1);
+      }
+      return net.fetch(pathToFileURL(filePath).toString());
+    } catch {
+      return new Response('Not found', { status: 404 });
+    }
+  });
+
   // Apply the persisted theme to the native title bar before the window opens
   // so there is no dark-title-bar flash when the user prefers light theme.
   const startupSettings = loadAppSettings();
@@ -1055,6 +1116,11 @@ function buildPopoutMenu(win: Electron.BrowserWindow): Electron.Menu {
           },
         },
         { type: 'separator' as const },
+        {
+          label: 'Open Markdown Preview',
+          accelerator: MARKDOWN_PREVIEW_ACCELERATOR,
+          click: () => send('menu:markdownPreview'),
+        },
         { label: 'Toggle Whitespace & EOL', click: () => send('menu:toggleWhitespace') },
         { type: 'separator' as const },
         { label: 'Zoom In',    accelerator: 'CmdOrCtrl+=', click: () => adjustZoom(wc, ZOOM_STEP) },
@@ -1168,12 +1234,267 @@ ipcMain.handle('window:confirmClose', (event) => {
   win.close();
 });
 
+// ── Markdown Preview popup window ─────────────────────────────────────────────
+const markdownPreviewManager = createMarkdownPreviewManager();
+let isProgrammaticPreviewMove = false;
+let previewSnapTimer: ReturnType<typeof setTimeout> | null = null;
+
+function setPreviewPositionProgrammatically(win: BrowserWindow, x: number, y: number): void {
+  if (win.isDestroyed()) return;
+  const [curX, curY] = win.getPosition();
+  const targetX = Math.round(x);
+  const targetY = Math.round(y);
+  if (curX === targetX && curY === targetY) return;
+  isProgrammaticPreviewMove = true;
+  try {
+    win.setPosition(targetX, targetY);
+  } finally {
+    isProgrammaticPreviewMove = false;
+  }
+}
+
+function syncDockedMarkdownPreviewToMain(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const previewWinId = markdownPreviewManager.getWindowId();
+  if (previewWinId === null) return;
+  const previewWin = BrowserWindow.fromId(previewWinId);
+  if (!previewWin || previewWin.isDestroyed() || previewWin.isMinimized()) return;
+  const nextPos = markdownPreviewManager.onMainBoundsChanged(mainWindow.getBounds());
+  if (!nextPos) return;
+  setPreviewPositionProgrammatically(previewWin, nextPos.x, nextPos.y);
+}
+
+/**
+ * Raises the Markdown preview popup to the top of the window stack (above
+ * other apps like VS Code) without stealing keyboard focus from `mainWindow`.
+ * On Windows, temporarily toggling `alwaysOnTop` on the preview window forces
+ * the OS window manager to bring it above other foreground applications even
+ * when it does not have input focus.
+ */
+function bringMarkdownPreviewToFront(): void {
+  const previewWinId = markdownPreviewManager.getWindowId();
+  if (previewWinId === null) return;
+  const previewWin = BrowserWindow.fromId(previewWinId);
+  if (!previewWin || previewWin.isDestroyed() || previewWin.isMinimized()) return;
+
+  const alreadyPinned = isWindowAlwaysOnTop(previewWin);
+  if (alreadyPinned) {
+    previewWin.moveTop();
+    return;
+  }
+
+  previewWin.setAlwaysOnTop(true);
+  previewWin.showInactive();
+  previewWin.moveTop();
+  previewWin.setAlwaysOnTop(false);
+}
+
+function buildMarkdownPreviewMenu(win: Electron.BrowserWindow): Electron.Menu {
+  const wc = win.webContents;
+  const template: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: 'File',
+      submenu: [
+        { label: 'Close Preview', accelerator: 'CmdOrCtrl+W', click: () => win.close() },
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'copy' as const },
+        { role: 'selectAll' as const },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        {
+          label: 'Always on Top',
+          type: 'checkbox' as const,
+          checked: isWindowAlwaysOnTop(win),
+          click: () => {
+            toggleWindowAlwaysOnTop(win);
+            refreshAlwaysOnTopMenus(win);
+          },
+        },
+        { type: 'separator' as const },
+        { label: 'Zoom In',    accelerator: 'CmdOrCtrl+=', click: () => adjustZoom(wc, ZOOM_STEP) },
+        { label: 'Zoom Out',   accelerator: 'CmdOrCtrl+-', click: () => adjustZoom(wc, -ZOOM_STEP) },
+        { label: 'Reset Zoom', accelerator: 'CmdOrCtrl+0', click: () => resetZoom(wc) },
+      ],
+    },
+  ];
+  return Menu.buildFromTemplate(template);
+}
+
+function sendUpdateToMarkdownPreviewWindow(data: MarkdownPreviewData): void {
+  const winId = markdownPreviewManager.getWindowId();
+  if (winId === null) return;
+  const win = BrowserWindow.fromId(winId);
+  if (!win || win.isDestroyed()) return;
+  const wc = win.webContents;
+  if (!wc.isDestroyed() && !wc.isLoading()) {
+    wc.send('markdown:previewUpdate', data);
+  }
+}
+
+function broadcastMarkdownPreviewVisibility(isOpen: boolean): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('markdown:previewVisibilityChanged', isOpen);
+  }
+  for (const winId of popoutWindowIds) {
+    const win = BrowserWindow.fromId(winId);
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('markdown:previewVisibilityChanged', isOpen);
+    }
+  }
+}
+
+ipcMain.handle('markdown:openPreview', async (_event, rawData: unknown) => {
+  const existingId = markdownPreviewManager.getWindowId();
+  if (existingId !== null) {
+    const existingWin = BrowserWindow.fromId(existingId);
+    if (existingWin && !existingWin.isDestroyed()) {
+      existingWin.close();
+      markdownPreviewManager.clear();
+      broadcastMarkdownPreviewVisibility(false);
+      return false;
+    }
+    markdownPreviewManager.setWindowId(null);
+  }
+
+  const data = markdownPreviewManager.setData(rawData);
+
+  const initialMainBounds =
+    mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
+  const initialPos = initialMainBounds
+    ? markdownPreviewManager.dockToMain(initialMainBounds)
+    : null;
+
+  const previewWin = new BrowserWindow({
+    width: 820,
+    height: initialMainBounds ? initialMainBounds.height : 680,
+    ...(initialPos ? { x: Math.round(initialPos.x), y: Math.round(initialPos.y) } : {}),
+    title: `Preview — ${data.title}`,
+    icon: join(__dirname, '../../build/icon.png'),
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  previewWin.setMenu(buildMarkdownPreviewMenu(previewWin));
+  markdownPreviewManager.setWindowId(previewWin.id);
+  if (initialMainBounds) {
+    markdownPreviewManager.dockToMain(initialMainBounds, previewWin.getBounds());
+  }
+  const previewWinId = previewWin.id;
+  const previewWcId = previewWin.webContents.id;
+
+  // Magnetic / sticky behavior when the user moves the preview window:
+  // - If brought near the right edge of the main window, it sticks (docks) so
+  //   subsequent main-window moves carry the preview along.
+  // - If dragged away, it detaches and moves independently without affecting the main window.
+  previewWin.on('move', () => {
+    if (isProgrammaticPreviewMove) return;
+    if (!mainWindow || mainWindow.isDestroyed() || previewWin.isDestroyed()) return;
+    const { docked, snapPosition } = markdownPreviewManager.onPreviewMoved(
+      mainWindow.getBounds(),
+      previewWin.getBounds(),
+    );
+    if (previewSnapTimer) {
+      clearTimeout(previewSnapTimer);
+      previewSnapTimer = null;
+    }
+    if (docked && snapPosition) {
+      previewSnapTimer = setTimeout(() => {
+        previewSnapTimer = null;
+        if (!previewWin.isDestroyed()) {
+          setPreviewPositionProgrammatically(previewWin, snapPosition.x, snapPosition.y);
+        }
+      }, 120);
+    }
+  });
+
+  // Open external http/https/mailto links in the OS default browser rather than navigating the popup
+  previewWin.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^(?:https?:|mailto:)/i.test(url)) {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+  previewWin.webContents.on('will-navigate', (navEvent, url) => {
+    if (/^(?:https?:|mailto:)/i.test(url)) {
+      navEvent.preventDefault();
+      void shell.openExternal(url);
+    }
+  });
+
+  previewWin.on('close', () => {
+    if (markdownPreviewManager.isPreviewWindow(previewWinId)) {
+      markdownPreviewManager.clear();
+      broadcastMarkdownPreviewVisibility(false);
+    }
+  });
+
+  previewWin.on('closed', () => {
+    if (previewSnapTimer) {
+      clearTimeout(previewSnapTimer);
+      previewSnapTimer = null;
+    }
+    markdownPreviewManager.clear();
+    broadcastMarkdownPreviewVisibility(false);
+    clearZoomState(previewWcId);
+  });
+
+  broadcastMarkdownPreviewVisibility(true);
+
+  previewWin.webContents.on('before-input-event', (event, input) => {
+    const ctrl = input.control || input.meta;
+    if (!ctrl || input.type !== 'keyDown') return;
+    if (input.key === '+') {
+      event.preventDefault();
+      adjustZoom(previewWin.webContents, ZOOM_STEP);
+    }
+  });
+
+  if (isDev) {
+    await previewWin.loadURL(
+      (process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173') + '#markdown-preview',
+    );
+  } else {
+    await previewWin.loadFile(join(__dirname, '../renderer/index.html'), {
+      hash: 'markdown-preview',
+    });
+  }
+  return true;
+});
+
+ipcMain.handle('markdown:updatePreview', (_event, rawData: unknown) => {
+  if (markdownPreviewManager.getWindowId() === null) return;
+  const data = markdownPreviewManager.setData(rawData);
+  sendUpdateToMarkdownPreviewWindow(data);
+});
+
+ipcMain.handle('markdown:getPreviewData', () => {
+  return markdownPreviewManager.getData();
+});
+
+ipcMain.handle('markdown:isPreviewOpen', () => {
+  const winId = markdownPreviewManager.getWindowId();
+  if (winId === null) return false;
+  const win = BrowserWindow.fromId(winId);
+  return !!win && !win.isDestroyed();
+});
+
 /**
  * Refreshes the menus that show `win`'s Always on Top state: the pop-out's own
  * menu (Windows/Linux) and the application menu checkbox (see appMenuAlwaysOnTopWindow).
  */
 function refreshAlwaysOnTopMenus(win: BrowserWindow): void {
   if (popoutWindowIds.has(win.id)) win.setMenu(buildPopoutMenu(win));
+  if (markdownPreviewManager.isPreviewWindow(win.id)) win.setMenu(buildMarkdownPreviewMenu(win));
   syncAlwaysOnTopMenuItem(
     Menu.getApplicationMenu(),
     appMenuAlwaysOnTopWindow(isMac, BrowserWindow.getFocusedWindow(), mainWindow),
@@ -1401,6 +1722,11 @@ function rebuildAppMenu(): void {
         },
         { label: 'Toggle Split View', click: () => mainWindow?.webContents.send('menu:toggleSplitView') },
         { label: 'Toggle Diff View', click: () => mainWindow?.webContents.send('menu:toggleDiffView') },
+        {
+          label: 'Open Markdown Preview',
+          accelerator: MARKDOWN_PREVIEW_ACCELERATOR,
+          click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:markdownPreview'),
+        },
         { type: 'separator' },
         { label: 'Toggle Whitespace & EOL', click: (_item, win) => (asBrowserWindow(win) ?? mainWindow)?.webContents.send('menu:toggleWhitespace') },
         { type: 'separator' },

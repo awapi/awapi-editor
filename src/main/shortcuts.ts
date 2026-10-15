@@ -15,6 +15,9 @@ export const SHORTCUTS_REFERENCE_ACCELERATOR = 'Shift+F1';
 /** Toggle File Explorer sidebar. Matches VS Code's sidebar toggle. */
 export const TOGGLE_EXPLORER_ACCELERATOR = 'CmdOrCtrl+B';
 
+/** Open or focus the live Markdown Preview popup window. */
+export const MARKDOWN_PREVIEW_ACCELERATOR = 'CmdOrCtrl+Shift+V';
+
 /**
  * Monaco editor keybindings that app menu accelerators must never use,
  * expressed as Electron accelerator strings.

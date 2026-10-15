@@ -46,6 +46,7 @@ const SHORTCUT_SECTIONS: ShortcutSection[] = [
       { action: 'Format Document', shortcut: 'Shift + Alt + F' },
       { action: 'Show All Commands (Command Palette)', shortcut: 'F1' },
       { action: 'Zoom In / Out / Reset', shortcut: 'Cmd/Ctrl + = / - / 0' },
+      { action: 'Open Markdown Preview', shortcut: 'Cmd/Ctrl + Shift + V' },
       { action: 'Toggle File Explorer', shortcut: 'Cmd/Ctrl + B' },
       { action: 'Toggle Integrated Terminal', shortcut: 'Ctrl + ` (all platforms)' },
       { action: 'New Integrated Terminal', shortcut: 'Ctrl + Shift + ` (all platforms)' },

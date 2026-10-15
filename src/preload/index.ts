@@ -178,6 +178,47 @@ export const electronAPI = {
   onMoveToMain: (callback: () => void) => ipcRenderer.on('menu:moveToMain', () => callback()),
   onAddTab: (callback: (tabData: unknown) => void) => ipcRenderer.on('menu:addTab', (_, tabData) => callback(tabData)),
 
+  // Markdown preview popup window
+  openMarkdownPreview: (data: {
+    title: string;
+    filePath: string | null;
+    content: string;
+    theme?: 'light' | 'dark';
+  }) => ipcRenderer.invoke('markdown:openPreview', data),
+  updateMarkdownPreview: (data: {
+    title: string;
+    filePath: string | null;
+    content: string;
+    theme?: 'light' | 'dark';
+  }) => ipcRenderer.invoke('markdown:updatePreview', data),
+  getMarkdownPreviewData: () => ipcRenderer.invoke('markdown:getPreviewData'),
+  onMarkdownPreviewUpdate: (
+    callback: (data: {
+      title: string;
+      filePath: string | null;
+      content: string;
+      theme?: 'light' | 'dark';
+    }) => void,
+  ) => {
+    const listener = (
+      _: unknown,
+      data: {
+        title: string;
+        filePath: string | null;
+        content: string;
+        theme?: 'light' | 'dark';
+      },
+    ) => callback(data);
+    ipcRenderer.on('markdown:previewUpdate', listener);
+    return () => {
+      ipcRenderer.removeListener('markdown:previewUpdate', listener);
+    };
+  },
+  onMarkdownPreview: (callback: () => void) => ipcRenderer.on('menu:markdownPreview', () => callback()),
+  getMarkdownPreviewOpen: () => ipcRenderer.invoke('markdown:isPreviewOpen') as Promise<boolean>,
+  onMarkdownPreviewVisibilityChanged: (callback: (isOpen: boolean) => void) =>
+    ipcRenderer.on('markdown:previewVisibilityChanged', (_, isOpen: boolean) => callback(isOpen)),
+
   // Cleanup listeners
   removeListeners: () => {
     ipcRenderer.removeAllListeners('menu:new');
@@ -213,6 +254,8 @@ export const electronAPI = {
     ipcRenderer.removeAllListeners('menu:popoutActiveTab');
     ipcRenderer.removeAllListeners('menu:moveToMain');
     ipcRenderer.removeAllListeners('menu:addTab');
+    ipcRenderer.removeAllListeners('menu:markdownPreview');
+    ipcRenderer.removeAllListeners('markdown:previewVisibilityChanged');
   }
 };
 

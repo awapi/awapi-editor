@@ -54,7 +54,7 @@ import {
   type ContextMenuDeps,
 } from './contextMenu';
 import {
-  fileArgsFromArgv,
+  pathsFromArgv,
   getCliCommandStatus,
   setCliCommandEnabled,
   type CliCommandDeps,
@@ -99,8 +99,8 @@ const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
 
 /**
- * Extract all file paths from argv produced by Electron / the OS, resolving
- * relative paths against `workingDirectory`.
+ * Extract all file and directory paths from argv produced by Electron / the OS,
+ * resolving relative paths against `workingDirectory`.
  */
 function cliArgDeps(): CliArgDeps {
   return {
@@ -112,11 +112,21 @@ function cliArgDeps(): CliArgDeps {
         return false;
       }
     },
+    isDirectory: (p: string) => {
+      try {
+        return fs.statSync(p).isDirectory();
+      } catch {
+        return false;
+      }
+    },
   };
 }
 
-function extractFilesFromArgv(argv: string[], workingDirectory = process.cwd()): string[] {
-  return fileArgsFromArgv(argv, isDev, workingDirectory, cliArgDeps());
+function extractPathsFromArgv(
+  argv: string[],
+  workingDirectory = process.cwd(),
+): { files: string[]; directories: string[] } {
+  return pathsFromArgv(argv, isDev, workingDirectory, cliArgDeps());
 }
 
 /** Add `filePath` to "Open Recent" and refresh the application menu. */
@@ -142,22 +152,48 @@ function sendFileToRenderer(filePath: string): void {
   sendWhenLoaded(win, 'file:openFromArgs', filePath);
 }
 
-// macOS: the OS sends this event when a file is opened via Finder / "Open With".
+/**
+ * Send a folder-open request (Windows Explorer folder context menu, macOS Finder,
+ * or CLI argument) to the renderer once it is ready so the File Explorer sidebar
+ * opens rooted at `dirPath`.
+ */
+function sendFolderToRenderer(dirPath: string): void {
+  const win = ensureWindow(mainWindow, () => {
+    createWindow();
+    return mainWindow!;
+  });
+  saveAppSettings({ explorerFolderPath: dirPath, explorerVisible: true });
+  sendWhenLoaded(win, 'folder:openFromArgs', dirPath);
+}
+
+function isExistingDirectory(targetPath: string): boolean {
+  try {
+    return fs.statSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// macOS: the OS sends this event when a file or folder is opened via Finder / "Open With".
 // It may fire before app.whenReady() (e.g. launching the app by opening a
 // file), so it is queued until startup creates the window.
-let pendingOpenFilePath: string | null = null;
-app.on('open-file', (event, filePath) => {
+let pendingOpenPath: string | null = null;
+app.on('open-file', (event, targetPath) => {
   event.preventDefault();
   if (app.isReady()) {
-    sendFileToRenderer(filePath);
+    if (isExistingDirectory(targetPath)) {
+      sendFolderToRenderer(targetPath);
+    } else {
+      sendFileToRenderer(targetPath);
+    }
   } else {
-    pendingOpenFilePath = filePath;
+    pendingOpenPath = targetPath;
   }
 });
 
 // Single-instance lock: if the app is already running and the user opens
-// another file via "Open With", the OS launches a second process. We redirect
-// that request to the existing window and quit the second process.
+// another file or folder via "Open With" / context menu, the OS launches a second
+// process. We redirect that request to the existing window and quit the second process.
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
@@ -168,8 +204,11 @@ if (!gotLock) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
-    const filePaths = extractFilesFromArgv(argv, workingDirectory || process.cwd());
-    for (const filePath of filePaths) {
+    const { files, directories } = extractPathsFromArgv(argv, workingDirectory || process.cwd());
+    if (directories.length > 0) {
+      sendFolderToRenderer(directories[directories.length - 1]);
+    }
+    for (const filePath of files) {
       sendFileToRenderer(filePath);
     }
   });
@@ -242,15 +281,26 @@ app.whenReady().then(() => {
   // An 'open-file' event right after 'ready' may already have created it.
   if (!mainWindow) createWindow();
 
-  // Open file(s) passed as CLI arguments (Windows/Linux "Open With" or terminal `awed`)
-  const cliFiles = extractFilesFromArgv(process.argv, process.cwd());
-  const filesToOpen = pendingOpenFilePath
-    ? [pendingOpenFilePath, ...cliFiles.filter(f => f !== pendingOpenFilePath)]
+  // Open file(s) or folder(s) passed as CLI arguments (Windows/Linux "Open With", context menu, or terminal `awed`)
+  const { files: cliFiles, directories: cliDirectories } = extractPathsFromArgv(process.argv, process.cwd());
+  const pendingIsDir = pendingOpenPath ? isExistingDirectory(pendingOpenPath) : false;
+  const pendingFile = pendingOpenPath && !pendingIsDir ? pendingOpenPath : null;
+  const pendingDir = pendingOpenPath && pendingIsDir ? pendingOpenPath : null;
+
+  const dirsToOpen = pendingDir
+    ? [...cliDirectories.filter(d => d !== pendingDir), pendingDir]
+    : cliDirectories;
+  if (dirsToOpen.length > 0) {
+    sendFolderToRenderer(dirsToOpen[dirsToOpen.length - 1]);
+  }
+
+  const filesToOpen = pendingFile
+    ? [pendingFile, ...cliFiles.filter(f => f !== pendingFile)]
     : cliFiles;
   for (const fileToOpen of filesToOpen) {
     sendFileToRenderer(fileToOpen);
   }
-  pendingOpenFilePath = null;
+  pendingOpenPath = null;
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

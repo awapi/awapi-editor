@@ -37,6 +37,8 @@ export interface CliArgDeps {
   platform: NodeJS.Platform;
   /** Whether a file (not a directory) exists at `p`. */
   isFile: (p: string) => boolean;
+  /** Whether a directory exists at `p`. */
+  isDirectory?: (p: string) => boolean;
 }
 
 /** Reads an env var; case-insensitive on Windows. */
@@ -116,19 +118,21 @@ export function resolvePathFromCwd(platform: NodeJS.Platform, cwd: string, targe
 }
 
 /**
- * Extracts all existing file paths from an Electron `argv` array, resolving
- * relative paths against `workingDirectory` (which `second-instance` supplies
- * from the caller's shell `cwd`, or `process.cwd()` on initial startup).
+ * Extracts all existing file and directory paths from an Electron `argv` array,
+ * resolving relative paths against `workingDirectory` (which `second-instance`
+ * supplies from the caller's shell `cwd`, or `process.cwd()` on initial startup).
  */
-export function fileArgsFromArgv(
+export function pathsFromArgv(
   argv: string[],
   isDev: boolean,
   workingDirectory: string,
   deps: CliArgDeps,
-): string[] {
+): { files: string[]; directories: string[] } {
   const candidates = argv.slice(isDev ? 2 : 1);
-  const results: string[] = [];
-  const seen = new Set<string>();
+  const files: string[] = [];
+  const directories: string[] = [];
+  const seenFiles = new Set<string>();
+  const seenDirs = new Set<string>();
   let afterDoubleDash = false;
 
   for (const arg of candidates) {
@@ -149,14 +153,47 @@ export function fileArgsFromArgv(
 
     if (deps.isFile(resolved)) {
       const key = deps.platform === 'win32' ? resolved.toLowerCase() : resolved;
-      if (!seen.has(key)) {
-        seen.add(key);
-        results.push(resolved);
+      if (!seenFiles.has(key)) {
+        seenFiles.add(key);
+        files.push(resolved);
+      }
+    } else if (deps.isDirectory?.(resolved)) {
+      const key = deps.platform === 'win32' ? resolved.toLowerCase() : resolved;
+      if (!seenDirs.has(key)) {
+        seenDirs.add(key);
+        directories.push(resolved);
       }
     }
   }
 
-  return results;
+  return { files, directories };
+}
+
+/**
+ * Extracts all existing file paths from an Electron `argv` array, resolving
+ * relative paths against `workingDirectory` (which `second-instance` supplies
+ * from the caller's shell `cwd`, or `process.cwd()` on initial startup).
+ */
+export function fileArgsFromArgv(
+  argv: string[],
+  isDev: boolean,
+  workingDirectory: string,
+  deps: CliArgDeps,
+): string[] {
+  return pathsFromArgv(argv, isDev, workingDirectory, deps).files;
+}
+
+/**
+ * Extracts all existing directory paths from an Electron `argv` array, resolving
+ * relative paths against `workingDirectory`.
+ */
+export function directoryArgsFromArgv(
+  argv: string[],
+  isDev: boolean,
+  workingDirectory: string,
+  deps: CliArgDeps,
+): string[] {
+  return pathsFromArgv(argv, isDev, workingDirectory, deps).directories;
 }
 
 /**

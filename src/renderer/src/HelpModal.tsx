@@ -50,7 +50,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       {
         heading: 'File Explorer Context Menu (Windows)',
         description:
-          'On Windows, enable "Edit with AwapiEditor" in Preferences → General to open any file from the right-click menu.',
+          'On Windows, enable "Edit with AwapiEditor" in Preferences → General to open any file or folder from the right-click menu.',
       },
     ],
   },

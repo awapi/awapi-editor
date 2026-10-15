@@ -131,8 +131,11 @@ export function parseCsv(content: string, separator: CsvSeparator = ','): string
 
   const rows: string[][] = [];
   let currentRow: string[] = [];
+  let fieldStart = 0;
   let currentField = '';
+  let hasFieldPrefix = false;
   let inQuotes = false;
+  let maxCols = 1;
 
   for (let i = 0; i < content.length; i++) {
     const ch = content[i];
@@ -151,34 +154,49 @@ export function parseCsv(content: string, separator: CsvSeparator = ','): string
       continue;
     }
 
-    if (ch === '"' && currentField.length === 0) {
+    if (ch === '"' && !hasFieldPrefix && i === fieldStart) {
       inQuotes = true;
+      hasFieldPrefix = true;
+      currentField = '';
       continue;
     }
 
     if (ch === separator) {
-      currentRow.push(currentField);
+      currentRow.push(hasFieldPrefix ? currentField : content.slice(fieldStart, i));
       currentField = '';
+      hasFieldPrefix = false;
+      fieldStart = i + 1;
       continue;
     }
 
     if (ch === '\r' || ch === '\n') {
+      const value = hasFieldPrefix ? currentField : content.slice(fieldStart, i);
       if (ch === '\r' && content[i + 1] === '\n') {
         i++;
       }
-      currentRow.push(currentField);
+      currentRow.push(value);
+      if (currentRow.length > maxCols) {
+        maxCols = currentRow.length;
+      }
       rows.push(currentRow);
       currentRow = [];
       currentField = '';
+      hasFieldPrefix = false;
+      fieldStart = i + 1;
       continue;
     }
 
-    currentField += ch;
+    if (hasFieldPrefix) {
+      currentField += ch;
+    }
   }
 
   // Push final field/row unless the file ended with a trailing newline
-  if (inQuotes || currentField.length > 0 || currentRow.length > 0) {
-    currentRow.push(currentField);
+  if (inQuotes || hasFieldPrefix || fieldStart < content.length || currentRow.length > 0) {
+    currentRow.push(hasFieldPrefix ? currentField : content.slice(fieldStart));
+    if (currentRow.length > maxCols) {
+      maxCols = currentRow.length;
+    }
     rows.push(currentRow);
   }
 
@@ -186,13 +204,13 @@ export function parseCsv(content: string, separator: CsvSeparator = ','): string
     return [['']];
   }
 
-  const maxCols = Math.max(1, ...rows.map(r => r.length));
-  return rows.map(r => {
-    if (r.length === maxCols) return r;
-    const padded = [...r];
-    while (padded.length < maxCols) padded.push('');
-    return padded;
-  });
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    if (row.length < maxCols) {
+      while (row.length < maxCols) row.push('');
+    }
+  }
+  return rows;
 }
 
 function formatCsvField(value: string, separator: CsvSeparator): string {

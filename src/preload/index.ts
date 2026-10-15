@@ -162,6 +162,8 @@ export const electronAPI = {
   onOpenHelp: (callback: () => void) => ipcRenderer.on('menu:openHelp', () => callback()),
   onShowAllCommands: (callback: () => void) => ipcRenderer.on('menu:showAllCommands', () => callback()),
   onOpenFileFromArgs: (callback: (filePath: string) => void) => ipcRenderer.on('file:openFromArgs', (_, filePath) => callback(filePath)),
+  onOpenFolderFromArgs: (callback: (dirPath: string) => void) =>
+    ipcRenderer.on('folder:openFromArgs', (_, dirPath: string) => callback(dirPath)),
   printPreview: (content: string, language: string, title: string) =>
     ipcRenderer.invoke('print:preview', content, language, title),
 
@@ -207,6 +209,7 @@ export const electronAPI = {
     ipcRenderer.removeAllListeners('menu:openHelp');
     ipcRenderer.removeAllListeners('menu:showAllCommands');
     ipcRenderer.removeAllListeners('file:openFromArgs');
+    ipcRenderer.removeAllListeners('folder:openFromArgs');
     ipcRenderer.removeAllListeners('menu:popoutActiveTab');
     ipcRenderer.removeAllListeners('menu:moveToMain');
     ipcRenderer.removeAllListeners('menu:addTab');

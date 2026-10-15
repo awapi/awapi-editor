@@ -114,6 +114,12 @@ describe('TerminalPanel', () => {
     expect(t.closeSession).toHaveBeenCalledWith(2);
     expect(t.setActiveId).toHaveBeenCalledTimes(1);
 
+    fireEvent(screen.getByTestId('terminal-tab-1'), new MouseEvent('auxclick', { button: 1, bubbles: true }));
+    expect(t.closeSession).toHaveBeenCalledWith(1);
+
+    fireEvent(screen.getByTestId('terminal-tab-1'), new MouseEvent('auxclick', { button: 2, bubbles: true }));
+    expect(t.closeSession).toHaveBeenCalledTimes(2);
+
     fireEvent.click(screen.getByTestId('terminal-new'));
     expect(t.createSession).toHaveBeenCalledWith('/proj/a.txt');
 

@@ -192,6 +192,12 @@ const TerminalPanel: React.FC<TerminalPanelProps> = ({ terminals, cwdForNew }) =
                 data-testid={`terminal-tab-${session.id}`}
                 title={session.cwd}
                 onClick={() => terminals.setActiveId(session.id)}
+                onAuxClick={e => {
+                  if (e.button === 1) {
+                    e.stopPropagation();
+                    terminals.closeSession(session.id);
+                  }
+                }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',

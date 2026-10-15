@@ -90,6 +90,15 @@ describe('parseCsv and serializeCsv', () => {
     ]);
     expect(serializeCsv(grid, ';', '\r\n')).toBe('col1;col2\r\nval1;val2');
   });
+
+  it('parses large row counts without call stack overflow', () => {
+    const rowCount = 150000;
+    const raw = Array.from({ length: rowCount }, (_, i) => `${i},val${i}`).join('\n');
+    const grid = parseCsv(raw, ',');
+    expect(grid.length).toBe(rowCount);
+    expect(grid[0]).toEqual(['0', 'val0']);
+    expect(grid[rowCount - 1]).toEqual([String(rowCount - 1), `val${rowCount - 1}`]);
+  });
 });
 
 describe('getColumnLetter', () => {

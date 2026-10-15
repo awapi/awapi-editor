@@ -3,6 +3,8 @@ import {
   CLI_COMMAND_NAME,
   resolvePathFromCwd,
   fileArgsFromArgv,
+  directoryArgsFromArgv,
+  pathsFromArgv,
   resolveCliInstallPaths,
   buildWindowsCmdLauncher,
   buildPosixShellLauncher,
@@ -105,6 +107,33 @@ describe('cliCommand', () => {
       });
 
       expect(result).toEqual(['/home/me/work/-weird.txt']);
+    });
+
+    it('extracts both files and directories via pathsFromArgv and directoryArgsFromArgv', () => {
+      const files = new Set(['C:\\Users\\me\\project\\a.txt']);
+      const dirs = new Set(['C:\\Users\\me\\project', 'D:\\workspace\\repo']);
+      const argv = [
+        'C:\\Program Files\\AwapiEditor\\AwapiEditor.exe',
+        '.',
+        'a.txt',
+        'D:\\workspace\\repo',
+        'D:\\workspace\\REPO',
+      ];
+
+      const deps = {
+        platform: 'win32' as const,
+        isFile: (p: string) => files.has(p),
+        isDirectory: (p: string) => dirs.has(p) || dirs.has(p.replace('REPO', 'repo')),
+      };
+
+      expect(pathsFromArgv(argv, false, 'C:\\Users\\me\\project', deps)).toEqual({
+        files: ['C:\\Users\\me\\project\\a.txt'],
+        directories: ['C:\\Users\\me\\project', 'D:\\workspace\\repo'],
+      });
+      expect(directoryArgsFromArgv(argv, false, 'C:\\Users\\me\\project', deps)).toEqual([
+        'C:\\Users\\me\\project',
+        'D:\\workspace\\repo',
+      ]);
     });
   });
 

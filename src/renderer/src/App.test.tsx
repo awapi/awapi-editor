@@ -508,6 +508,35 @@ describe('Editor Core Tests', () => {
     await waitFor(() => expect((window as any).electronAPI.readFile.mock.calls.length).toBe(callsBefore));
   });
 
+  it('opens the File Explorer sidebar rooted at the given folder when onOpenFolderFromArgs fires', async () => {
+    let capturedFolderCb: ((dirPath: string) => void) | null = null;
+    (window as any).electronAPI.onOpenFolderFromArgs = vi.fn((cb: (dirPath: string) => void) => {
+      capturedFolderCb = cb;
+    });
+    (window as any).electronAPI.readDirectory = vi.fn().mockResolvedValue({
+      ok: true,
+      dirPath: 'C:\\Projects\\MyFolder',
+      name: 'MyFolder',
+      entries: [],
+    });
+
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    );
+
+    await waitFor(() => expect(capturedFolderCb).not.toBeNull());
+    await act(async () => {
+      capturedFolderCb!('C:\\Projects\\MyFolder');
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('file-explorer-sidebar')).toBeTruthy();
+      expect((window as any).electronAPI.readDirectory).toHaveBeenCalledWith('C:\\Projects\\MyFolder');
+    });
+  });
+
   it('closes a tab on middle-click (auxclick button=1)', async () => {
     (window as any).electronAPI.loadSession.mockResolvedValue({
       activeTabId: 'tab-1',

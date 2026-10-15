@@ -4,6 +4,10 @@
 
 export const CONTEXT_MENU_KEY = 'HKCU\\Software\\Classes\\*\\shell\\AwapiEditor';
 export const CONTEXT_MENU_COMMAND_KEY = `${CONTEXT_MENU_KEY}\\command`;
+export const CONTEXT_MENU_DIR_KEY = 'HKCU\\Software\\Classes\\Directory\\shell\\AwapiEditor';
+export const CONTEXT_MENU_DIR_COMMAND_KEY = `${CONTEXT_MENU_DIR_KEY}\\command`;
+export const CONTEXT_MENU_DIR_BG_KEY = 'HKCU\\Software\\Classes\\Directory\\Background\\shell\\AwapiEditor';
+export const CONTEXT_MENU_DIR_BG_COMMAND_KEY = `${CONTEXT_MENU_DIR_BG_KEY}\\command`;
 export const CONTEXT_MENU_LABEL = 'Edit with AwapiEditor';
 
 export interface ContextMenuStatus {
@@ -36,6 +40,15 @@ export function buildQueryArgs(): string[] {
   return ['query', CONTEXT_MENU_COMMAND_KEY, '/ve'];
 }
 
+/** Builds the sequence of `reg.exe` queries verifying both file and folder context menus. */
+export function buildQueryCommands(): string[][] {
+  return [
+    ['query', CONTEXT_MENU_COMMAND_KEY, '/ve'],
+    ['query', CONTEXT_MENU_DIR_COMMAND_KEY, '/ve'],
+    ['query', CONTEXT_MENU_DIR_BG_COMMAND_KEY, '/ve'],
+  ];
+}
+
 export interface RegisterCommandOptions {
   execPath: string;
   isPackaged?: boolean;
@@ -45,7 +58,9 @@ export interface RegisterCommandOptions {
 
 /**
  * Builds the sequence of `reg.exe` invocations that register "Edit with AwapiEditor"
- * under `HKCU\Software\Classes\*\shell\AwapiEditor`.
+ * under `HKCU\Software\Classes\*\shell\AwapiEditor`,
+ * `HKCU\Software\Classes\Directory\shell\AwapiEditor`, and
+ * `HKCU\Software\Classes\Directory\Background\shell\AwapiEditor`.
  */
 export function buildRegisterCommands(
   input: string | RegisterCommandOptions,
@@ -61,17 +76,36 @@ export function buildRegisterCommands(
     !isPackaged && opts.appEntryPath
       ? `"${opts.execPath}" "${opts.appEntryPath}" "%1"`
       : `"${opts.execPath}" "%1"`;
+  const bgCommandValue =
+    !isPackaged && opts.appEntryPath
+      ? `"${opts.execPath}" "${opts.appEntryPath}" "%V"`
+      : `"${opts.execPath}" "%V"`;
 
   return [
     ['add', CONTEXT_MENU_KEY, '/ve', '/t', 'REG_SZ', '/d', CONTEXT_MENU_LABEL, '/f'],
     ['add', CONTEXT_MENU_KEY, '/v', 'Icon', '/t', 'REG_SZ', '/d', iconValue, '/f'],
     ['add', CONTEXT_MENU_COMMAND_KEY, '/ve', '/t', 'REG_SZ', '/d', commandValue, '/f'],
+    ['add', CONTEXT_MENU_DIR_KEY, '/ve', '/t', 'REG_SZ', '/d', CONTEXT_MENU_LABEL, '/f'],
+    ['add', CONTEXT_MENU_DIR_KEY, '/v', 'Icon', '/t', 'REG_SZ', '/d', iconValue, '/f'],
+    ['add', CONTEXT_MENU_DIR_COMMAND_KEY, '/ve', '/t', 'REG_SZ', '/d', commandValue, '/f'],
+    ['add', CONTEXT_MENU_DIR_BG_KEY, '/ve', '/t', 'REG_SZ', '/d', CONTEXT_MENU_LABEL, '/f'],
+    ['add', CONTEXT_MENU_DIR_BG_KEY, '/v', 'Icon', '/t', 'REG_SZ', '/d', iconValue, '/f'],
+    ['add', CONTEXT_MENU_DIR_BG_COMMAND_KEY, '/ve', '/t', 'REG_SZ', '/d', bgCommandValue, '/f'],
   ];
 }
 
-/** Builds the `reg.exe` arguments to remove the context menu registry key tree. */
+/** Builds the `reg.exe` arguments to remove the file context menu registry key tree. */
 export function buildUnregisterArgs(): string[] {
   return ['delete', CONTEXT_MENU_KEY, '/f'];
+}
+
+/** Builds the sequence of `reg.exe` invocations to remove all context menu registry keys. */
+export function buildUnregisterCommands(): string[][] {
+  return [
+    ['delete', CONTEXT_MENU_KEY, '/f'],
+    ['delete', CONTEXT_MENU_DIR_KEY, '/f'],
+    ['delete', CONTEXT_MENU_DIR_BG_KEY, '/f'],
+  ];
 }
 
 /** Whether Windows Explorer context menu registration is supported in this environment. */
@@ -85,10 +119,15 @@ export async function getContextMenuStatus(deps: ContextMenuDeps): Promise<Conte
     return { supported: false, enabled: false };
   }
   try {
-    const res = await deps.runReg(buildQueryArgs());
+    for (const args of buildQueryCommands()) {
+      const res = await deps.runReg(args);
+      if (res.code !== 0) {
+        return { supported: true, enabled: false };
+      }
+    }
     return {
       supported: true,
-      enabled: res.code === 0,
+      enabled: true,
     };
   } catch {
     return { supported: true, enabled: false };
@@ -127,17 +166,33 @@ export async function setContextMenuEnabled(
       }
       return { ok: true, enabled: true };
     } else {
-      const res = await deps.runReg(buildUnregisterArgs());
-      if (res.code !== 0) {
-        // If the key is already absent, verify via query and treat as success.
-        const status = await getContextMenuStatus(deps);
-        if (!status.enabled) {
+      let lastFailure: { code: number; stdout: string; stderr: string } | null = null;
+      for (const args of buildUnregisterCommands()) {
+        const res = await deps.runReg(args);
+        if (res.code !== 0) {
+          lastFailure = res;
+        }
+      }
+      if (lastFailure) {
+        // Verify whether any key still exists; if all are absent, treat as success.
+        let anyPresent = false;
+        for (const queryArgs of buildQueryCommands()) {
+          const check = await deps.runReg(queryArgs);
+          if (check.code === 0) {
+            anyPresent = true;
+            break;
+          }
+        }
+        if (!anyPresent) {
           return { ok: true, enabled: false };
         }
         return {
           ok: false,
           enabled: true,
-          error: res.stderr.trim() || res.stdout.trim() || `reg.exe exited with code ${res.code}`,
+          error:
+            lastFailure.stderr.trim() ||
+            lastFailure.stdout.trim() ||
+            `reg.exe exited with code ${lastFailure.code}`,
         };
       }
       return { ok: true, enabled: false };

@@ -183,6 +183,8 @@ declare global {
       onOpenShortcuts: (callback: () => void) => void;
       onOpenHelp: (callback: () => void) => void;
       onShowAllCommands: (callback: () => void) => void;
+      onOpenFileFromArgs: (callback: (filePath: string) => void) => void;
+      onOpenFolderFromArgs: (callback: (dirPath: string) => void) => void;
       printPreview: (content: string, language: string, title: string) => Promise<void>;
 
       onPopoutActiveTab: (callback: () => void) => void;

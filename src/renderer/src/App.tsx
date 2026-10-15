@@ -79,6 +79,7 @@ const App: React.FC = () => {
   const [explorerFolderPath, setExplorerFolderPath] = useState<string | null>(null);
   const [explorerRefreshToken, setExplorerRefreshToken] = useState(0);
   const explorerSettingsReadyRef = React.useRef(false);
+  const explorerOverriddenByArgsRef = React.useRef(false);
   const [tabContextMenu, setTabContextMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
   const [closedTabs, setClosedTabs] = useState<Tab[]>([]);
   const [renameTarget, setRenameTarget] = useState<{ tabId: string; currentName: string } | null>(null);
@@ -511,7 +512,7 @@ const App: React.FC = () => {
         if (w.electronAPI?.loadSettings) {
           try {
             const settings = await w.electronAPI.loadSettings();
-            if (settings) {
+            if (settings && !explorerOverriddenByArgsRef.current) {
               if (typeof settings.explorerFolderPath === 'string' && settings.explorerFolderPath) {
                 setExplorerFolderPath(settings.explorerFolderPath);
               }
@@ -925,6 +926,13 @@ const App: React.FC = () => {
         } catch (e) {
           console.error('Error opening file from args', e);
         }
+      });
+
+      w.electronAPI.onOpenFolderFromArgs?.((dirPath: string) => {
+        if (isPopoutMode || typeof dirPath !== 'string' || !dirPath.trim()) return;
+        explorerOverriddenByArgsRef.current = true;
+        setExplorerFolderPath(dirPath);
+        setIsExplorerOpen(true);
       });
 
       // Handle global drag and drop
@@ -1647,7 +1655,15 @@ const App: React.FC = () => {
     );
   };
 
-  const activeTabLineCount = activeTab ? activeTab.content.split('\n').length : 1;
+  const activeTabContent = activeTab?.content;
+  const activeTabLineCount = React.useMemo(() => {
+    if (!activeTabContent) return 1;
+    let lines = 1;
+    for (let i = 0; i < activeTabContent.length; i++) {
+      if (activeTabContent.charCodeAt(i) === 10) lines++;
+    }
+    return lines;
+  }, [activeTabContent]);
 
   const handleDragStart = (e: React.DragEvent, index: number) => {
     e.dataTransfer.setData('text/plain', index.toString());

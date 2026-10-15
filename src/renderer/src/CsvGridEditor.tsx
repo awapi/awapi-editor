@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import {
   CSV_SEPARATORS,
   type CsvSeparator,
@@ -11,6 +11,20 @@ import {
 } from './csv';
 import type { ThemeColors } from './theme/ThemeContext';
 import type { EolKind } from './lineEndings';
+
+/** Height in pixels of each virtualized CSV body row. */
+export const CSV_ROW_HEIGHT = 28;
+/** Default viewport height (px) used before layout measurements or in JSDOM tests. */
+const DEFAULT_VIEWPORT_HEIGHT = 600;
+/** Extra rows rendered above and below the visible scroll window. */
+const VIRTUAL_OVERSCAN_ROWS = 15;
+/** Maximum number of undo history entries kept per CSV file. */
+const MAX_UNDO_HISTORY = 100;
+
+interface HistoryEntry {
+  content: string;
+  selectedCell: { row: number; col: number };
+}
 
 export interface CsvGridEditorProps {
   content: string;
@@ -43,12 +57,49 @@ const CsvGridEditor: React.FC<CsvGridEditorProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [sortState, setSortState] = useState<SortState | null>(null);
   const [selectedCell, setSelectedCell] = useState<{ row: number; col: number }>({ row: 0, col: 0 });
+  const [undoStack, setUndoStack] = useState<HistoryEntry[]>([]);
+  const [redoStack, setRedoStack] = useState<HistoryEntry[]>([]);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const [scrollTop, setScrollTop] = useState<number>(0);
+  const [viewportHeight, setViewportHeight] = useState<number>(DEFAULT_VIEWPORT_HEIGHT);
 
-  // Reset separator override if the file changes
+  // Reset separator override and undo/redo history if the file changes
   useEffect(() => {
     setSeparatorOverride(null);
     setSortState(null);
+    setUndoStack([]);
+    setRedoStack([]);
+    setScrollTop(0);
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
+    }
   }, [filename]);
+
+  // Measure the scroll viewport height and update on resize
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const measure = () => {
+      if (el.clientHeight > 0) {
+        setViewportHeight(el.clientHeight);
+      }
+    };
+    measure();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(measure);
+      observer.observe(el);
+      return () => observer.disconnect();
+    }
+    return undefined;
+  }, []);
+
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    setScrollTop(target.scrollTop);
+    if (target.clientHeight > 0 && target.clientHeight !== viewportHeight) {
+      setViewportHeight(target.clientHeight);
+    }
+  }, [viewportHeight]);
 
   const detectedSeparator = useMemo(
     () => detectCsvSeparator(content, filename),
@@ -67,8 +118,87 @@ const CsvGridEditor: React.FC<CsvGridEditorProps> = ({
 
   const commitGrid = (nextGrid: string[][], sep: CsvSeparator = activeSeparator) => {
     const serialized = serializeCsv(nextGrid, sep, eolSeq);
+    if (serialized === content) return;
+    setUndoStack(prev => {
+      const next = [...prev, { content, selectedCell }];
+      return next.length > MAX_UNDO_HISTORY ? next.slice(next.length - MAX_UNDO_HISTORY) : next;
+    });
+    setRedoStack([]);
     onChange(serialized);
   };
+
+  const selectCell = useCallback((rowIndex: number, colIndex: number) => {
+    setSelectedCell({ row: rowIndex, col: colIndex });
+    onCursorChange?.(rowIndex + 1, colIndex + 1);
+  }, [onCursorChange]);
+
+  const handleUndo = useCallback(() => {
+    if (undoStack.length === 0) return;
+    const previous = undoStack[undoStack.length - 1];
+    setUndoStack(prev => prev.slice(0, -1));
+    setRedoStack(prev => [...prev, { content, selectedCell }]);
+    onChange(previous.content);
+    selectCell(previous.selectedCell.row, previous.selectedCell.col);
+  }, [undoStack, content, selectedCell, onChange, selectCell]);
+
+  const handleRedo = useCallback(() => {
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    setRedoStack(prev => prev.slice(0, -1));
+    setUndoStack(prev => [...prev, { content, selectedCell }]);
+    onChange(next.content);
+    selectCell(next.selectedCell.row, next.selectedCell.col);
+  }, [redoStack, content, selectedCell, onChange, selectCell]);
+
+  // Global keyboard shortcuts for Undo (Ctrl+Z / Cmd+Z) and Redo (Ctrl+Y / Cmd+Shift+Z / Ctrl+Shift+Z)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const isMod = e.ctrlKey || e.metaKey;
+      if (!isMod || e.altKey) return;
+
+      const target = e.target as HTMLElement | null;
+      if (target && target.getAttribute?.('data-testid') === 'csv-search-input') {
+        return;
+      }
+
+      const key = e.key.toLowerCase();
+      const isRedo = (key === 'z' && e.shiftKey) || (key === 'y' && !e.shiftKey);
+      if (key === 'z' && !e.shiftKey) {
+        if (undoStack.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleUndo();
+        }
+      } else if (isRedo) {
+        if (redoStack.length > 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleRedo();
+        }
+      }
+    };
+
+    const onBeforeInput = (e: InputEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && target.getAttribute?.('data-testid') === 'csv-search-input') {
+        return;
+      }
+      if (e.inputType === 'historyUndo' && undoStack.length > 0) {
+        e.preventDefault();
+        handleUndo();
+      } else if (e.inputType === 'historyRedo' && redoStack.length > 0) {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('beforeinput', onBeforeInput as EventListener, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('beforeinput', onBeforeInput as EventListener, true);
+    };
+  }, [undoStack.length, redoStack.length, handleUndo, handleRedo]);
 
   const handleCellChange = (rowIndex: number, colIndex: number, value: string) => {
     const nextGrid = grid.map((row, rIdx) =>
@@ -77,11 +207,6 @@ const CsvGridEditor: React.FC<CsvGridEditorProps> = ({
         : row,
     );
     commitGrid(nextGrid);
-  };
-
-  const selectCell = (rowIndex: number, colIndex: number) => {
-    setSelectedCell({ row: rowIndex, col: colIndex });
-    onCursorChange?.(rowIndex + 1, colIndex + 1);
   };
 
   const handleAddRowBelow = () => {
@@ -186,6 +311,26 @@ const CsvGridEditor: React.FC<CsvGridEditorProps> = ({
   }, [grid, hasHeader, rowCount, searchQuery, sortState]);
 
   const totalDataRows = hasHeader && rowCount > 1 ? rowCount - 1 : rowCount;
+
+  // Virtual window computation so large CSVs only render visible rows + overscan
+  const totalVisibleRows = dataRowIndices.length;
+  const visibleRowCount = Math.max(1, Math.ceil(viewportHeight / CSV_ROW_HEIGHT));
+  const rawStartIndex = Math.max(0, Math.floor(scrollTop / CSV_ROW_HEIGHT) - VIRTUAL_OVERSCAN_ROWS);
+  const virtualStartIndex = Math.min(
+    rawStartIndex,
+    Math.max(0, totalVisibleRows - visibleRowCount),
+  );
+  const virtualEndIndex = Math.min(
+    totalVisibleRows,
+    virtualStartIndex + visibleRowCount + VIRTUAL_OVERSCAN_ROWS * 2,
+  );
+  const topSpacerHeight = virtualStartIndex * CSV_ROW_HEIGHT;
+  const bottomSpacerHeight = Math.max(0, (totalVisibleRows - virtualEndIndex) * CSV_ROW_HEIGHT);
+  const windowedRowIndices = useMemo(
+    () => dataRowIndices.slice(virtualStartIndex, virtualEndIndex),
+    [dataRowIndices, virtualStartIndex, virtualEndIndex],
+  );
+
   const borderColor = themeMode === 'light' ? '#d4d4d8' : '#38383d';
   const headerBg = themeMode === 'light' ? '#f3f4f6' : '#252528';
   const selectedHighlight = themeMode === 'light' ? 'rgba(0, 122, 204, 0.14)' : 'rgba(0, 122, 204, 0.26)';
@@ -365,6 +510,42 @@ const CsvGridEditor: React.FC<CsvGridEditorProps> = ({
           )}
 
           <button
+            data-testid="csv-undo-button"
+            onClick={handleUndo}
+            disabled={undoStack.length === 0}
+            title="Undo (Ctrl+Z / Cmd+Z)"
+            style={{
+              padding: '3px 8px',
+              fontSize: '11px',
+              borderRadius: '4px',
+              border: `1px solid ${borderColor}`,
+              backgroundColor: colors.background,
+              color: colors.foreground,
+              cursor: undoStack.length > 0 ? 'pointer' : 'not-allowed',
+              opacity: undoStack.length > 0 ? 1 : 0.45,
+            }}
+          >
+            ↶ Undo
+          </button>
+          <button
+            data-testid="csv-redo-button"
+            onClick={handleRedo}
+            disabled={redoStack.length === 0}
+            title="Redo (Ctrl+Y / Cmd+Shift+Z)"
+            style={{
+              padding: '3px 8px',
+              fontSize: '11px',
+              borderRadius: '4px',
+              border: `1px solid ${borderColor}`,
+              backgroundColor: colors.background,
+              color: colors.foreground,
+              cursor: redoStack.length > 0 ? 'pointer' : 'not-allowed',
+              opacity: redoStack.length > 0 ? 1 : 0.45,
+            }}
+          >
+            ↷ Redo
+          </button>
+          <button
             data-testid="csv-add-row-button"
             onClick={handleAddRowBelow}
             title="Insert a new row below the selected row"
@@ -452,7 +633,12 @@ const CsvGridEditor: React.FC<CsvGridEditorProps> = ({
       </div>
 
       {/* Scrollable Table Container */}
-      <div style={{ flex: 1, overflow: 'auto' }}>
+      <div
+        ref={scrollContainerRef}
+        data-testid="csv-scroll-container"
+        onScroll={handleScroll}
+        style={{ flex: 1, overflow: 'auto' }}
+      >
         <table
           data-testid="csv-grid-table"
           style={{
@@ -598,81 +784,101 @@ const CsvGridEditor: React.FC<CsvGridEditorProps> = ({
                 </td>
               </tr>
             ) : (
-              dataRowIndices.map((actualRowIdx, visualRowIdx) => {
-                const row = grid[actualRowIdx] ?? [];
-                const displayRowNum = hasHeader && rowCount > 1 ? actualRowIdx : actualRowIdx + 1;
-                const isRowSelected = selectedCell.row === actualRowIdx;
-
-                return (
-                  <tr
-                    key={actualRowIdx}
-                    style={{
-                      backgroundColor:
-                        visualRowIdx % 2 === 1 ? zebraBg : 'transparent',
-                    }}
-                  >
-                    {/* Row number gutter */}
+              <>
+                {topSpacerHeight > 0 && (
+                  <tr aria-hidden="true" data-testid="csv-virtual-top-spacer">
                     <td
-                      onClick={() => selectCell(actualRowIdx, 0)}
+                      colSpan={colCount + 1}
+                      style={{ height: `${topSpacerHeight}px`, padding: 0, border: 'none' }}
+                    />
+                  </tr>
+                )}
+                {windowedRowIndices.map((actualRowIdx, windowOffset) => {
+                  const visualRowIdx = virtualStartIndex + windowOffset;
+                  const row = grid[actualRowIdx] ?? [];
+                  const displayRowNum = hasHeader && rowCount > 1 ? actualRowIdx : actualRowIdx + 1;
+                  const isRowSelected = selectedCell.row === actualRowIdx;
+
+                  return (
+                    <tr
+                      key={actualRowIdx}
                       style={{
-                        textAlign: 'center',
-                        fontSize: '11px',
-                        opacity: 0.65,
-                        padding: '4px',
-                        borderRight: `1px solid ${borderColor}`,
-                        borderBottom: `1px solid ${borderColor}`,
-                        backgroundColor: isRowSelected ? selectedHighlight : headerBg,
-                        userSelect: 'none',
-                        cursor: 'pointer',
+                        height: `${CSV_ROW_HEIGHT}px`,
+                        backgroundColor:
+                          visualRowIdx % 2 === 1 ? zebraBg : 'transparent',
                       }}
                     >
-                      {displayRowNum}
-                    </td>
+                      {/* Row number gutter */}
+                      <td
+                        onClick={() => selectCell(actualRowIdx, 0)}
+                        style={{
+                          textAlign: 'center',
+                          fontSize: '11px',
+                          opacity: 0.65,
+                          padding: '4px',
+                          borderRight: `1px solid ${borderColor}`,
+                          borderBottom: `1px solid ${borderColor}`,
+                          backgroundColor: isRowSelected ? selectedHighlight : headerBg,
+                          userSelect: 'none',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {displayRowNum}
+                      </td>
 
-                    {Array.from({ length: colCount }, (_, colIndex) => {
-                      const cellValue = row[colIndex] ?? '';
-                      const isCellSelected =
-                        selectedCell.row === actualRowIdx &&
-                        selectedCell.col === colIndex;
+                      {Array.from({ length: colCount }, (_, colIndex) => {
+                        const cellValue = row[colIndex] ?? '';
+                        const isCellSelected =
+                          selectedCell.row === actualRowIdx &&
+                          selectedCell.col === colIndex;
 
-                      return (
-                        <td
-                          key={colIndex}
-                          style={{
-                            padding: 0,
-                            borderRight: `1px solid ${borderColor}`,
-                            borderBottom: `1px solid ${borderColor}`,
-                            backgroundColor: isCellSelected
-                              ? selectedHighlight
-                              : 'transparent',
-                          }}
-                        >
-                          <input
-                            data-testid={`csv-cell-${actualRowIdx}-${colIndex}`}
-                            aria-label={`Row ${displayRowNum} Column ${getColumnLetter(colIndex)}`}
-                            value={cellValue}
-                            onFocus={() => selectCell(actualRowIdx, colIndex)}
-                            onChange={e =>
-                              handleCellChange(actualRowIdx, colIndex, e.target.value)
-                            }
+                        return (
+                          <td
+                            key={colIndex}
                             style={{
-                              width: '100%',
-                              boxSizing: 'border-box',
-                              padding: '5px 8px',
-                              border: 'none',
-                              outline: 'none',
-                              background: 'transparent',
-                              color: colors.foreground,
-                              fontSize: '13px',
-                              fontFamily: 'inherit',
+                              padding: 0,
+                              borderRight: `1px solid ${borderColor}`,
+                              borderBottom: `1px solid ${borderColor}`,
+                              backgroundColor: isCellSelected
+                                ? selectedHighlight
+                                : 'transparent',
                             }}
-                          />
-                        </td>
-                      );
-                    })}
+                          >
+                            <input
+                              data-testid={`csv-cell-${actualRowIdx}-${colIndex}`}
+                              aria-label={`Row ${displayRowNum} Column ${getColumnLetter(colIndex)}`}
+                              value={cellValue}
+                              onFocus={() => selectCell(actualRowIdx, colIndex)}
+                              onChange={e =>
+                                handleCellChange(actualRowIdx, colIndex, e.target.value)
+                              }
+                              style={{
+                                width: '100%',
+                                boxSizing: 'border-box',
+                                padding: '5px 8px',
+                                border: 'none',
+                                outline: 'none',
+                                background: 'transparent',
+                                color: colors.foreground,
+                                fontSize: '13px',
+                                fontFamily: 'inherit',
+                              }}
+                            />
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+                {bottomSpacerHeight > 0 && (
+                  <tr aria-hidden="true" data-testid="csv-virtual-bottom-spacer">
+                    <td
+                      colSpan={colCount + 1}
+                      style={{ height: `${bottomSpacerHeight}px`, padding: 0, border: 'none' }}
+                    />
                   </tr>
-                );
-              })
+                )}
+              </>
             )}
           </tbody>
         </table>

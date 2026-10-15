@@ -218,7 +218,7 @@ describe('Editor Core Tests', () => {
 
     const renderApp = async () => {
       render(<ThemeProvider><App /></ThemeProvider>);
-      await waitFor(() => screen.getByText('alpha.txt'));
+      await waitFor(() => screen.getByTestId('tab-title-tab-1'));
     };
 
     it('toggles the panel with Ctrl+`, starting a shell in the active file folder', async () => {
@@ -258,6 +258,34 @@ describe('Editor Core Tests', () => {
       await waitFor(() => screen.getByTestId('terminal-tab-9'));
       expect((window as any).electronAPI.ptyCreate).toHaveBeenCalledTimes(3);
       expect((window as any).electronAPI.ptyCreate).toHaveBeenCalledWith({ cwd: '/proj/alpha.txt', cols: 80, rows: 24 });
+    });
+
+    it('opens new terminals in the selected File Explorer folder when a folder is selected', async () => {
+      (window as any).electronAPI.loadSettings = vi.fn().mockResolvedValue({
+        explorerFolderPath: '/workspace/my-folder',
+        explorerVisible: true,
+      });
+      (window as any).electronAPI.readDirectory = vi.fn().mockResolvedValue({ ok: true, entries: [] });
+      (window as any).electronAPI.ptyCreate
+        .mockResolvedValueOnce({ ok: true, id: 7, cwd: '/workspace/my-folder', shell: 'zsh' })
+        .mockResolvedValueOnce({ ok: true, id: 8, cwd: '/workspace/my-folder', shell: 'zsh' });
+      await renderApp();
+
+      fireEvent.keyDown(window, { key: '`', code: 'Backquote', ctrlKey: true });
+      await waitFor(() => screen.getByTestId('terminal-tab-7'));
+      expect((window as any).electronAPI.ptyCreate).toHaveBeenCalledWith({
+        cwd: '/workspace/my-folder',
+        cols: 80,
+        rows: 24,
+      });
+
+      fireEvent.click(screen.getByTestId('terminal-new'));
+      await waitFor(() => screen.getByTestId('terminal-tab-8'));
+      expect((window as any).electronAPI.ptyCreate).toHaveBeenLastCalledWith({
+        cwd: '/workspace/my-folder',
+        cols: 80,
+        rows: 24,
+      });
     });
 
     it('collapses a double trigger (menu accelerator + keydown) into one toggle', async () => {

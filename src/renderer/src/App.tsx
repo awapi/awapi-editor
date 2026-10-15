@@ -200,6 +200,9 @@ const App: React.FC = () => {
   // Integrated terminal (main window only; pop-outs are single-file views).
   const terminals = useTerminalSessions(isPopoutMode ? null : undefined);
   const activeFilePath = tabs.find(t => t.id === activeTabId)?.filePath ?? null;
+  const terminalCwdForNew = explorerFolderPath ?? activeFilePath;
+  const terminalCwdForNewRef = React.useRef<string | null>(terminalCwdForNew);
+  terminalCwdForNewRef.current = terminalCwdForNew;
   const toggleTerminalRef = React.useRef(() => {});
   const lastTerminalToggleRef = React.useRef(0);
   toggleTerminalRef.current = () => {
@@ -209,8 +212,7 @@ const App: React.FC = () => {
     const now = Date.now();
     if (now - lastTerminalToggleRef.current < 150) return;
     lastTerminalToggleRef.current = now;
-    const tab = tabsRef.current.find(t => t.id === activeTabIdRef.current);
-    terminals.togglePanel(tab?.filePath ?? null);
+    terminals.togglePanel(terminalCwdForNewRef.current);
   };
   const newTerminalRef = React.useRef(() => {});
   const lastNewTerminalRef = React.useRef(0);
@@ -220,8 +222,7 @@ const App: React.FC = () => {
     const now = Date.now();
     if (now - lastNewTerminalRef.current < 150) return;
     lastNewTerminalRef.current = now;
-    const tab = tabsRef.current.find(t => t.id === activeTabIdRef.current);
-    void terminals.createSession(tab?.filePath ?? null);
+    void terminals.createSession(terminalCwdForNewRef.current);
   };
 
   useEffect(() => {
@@ -2460,7 +2461,7 @@ const App: React.FC = () => {
         />
       )}
 
-      {terminals.isAvailable && <TerminalPanel terminals={terminals} cwdForNew={activeFilePath} />}
+      {terminals.isAvailable && <TerminalPanel terminals={terminals} cwdForNew={terminalCwdForNew} />}
 
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
       <ShortcutsModal isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />

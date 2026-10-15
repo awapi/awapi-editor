@@ -72,7 +72,7 @@ function readStoredHeight(): number {
 
 export interface TerminalPanelProps {
   terminals: TerminalSessionsController;
-  /** File or folder new terminals start in (the active tab's file), or null for home. */
+  /** File or folder new terminals start in (the Explorer folder or active tab's file), or null for home. */
   cwdForNew: string | null;
 }
 

@@ -1562,19 +1562,8 @@ const App: React.FC = () => {
 
   const toggleSplitView = () => {
     setViewMode(prev => {
-      const next = prev === 'split' ? 'single' : 'split';
+      const next = prev !== 'single' ? 'single' : 'split';
       if (next === 'split' && (!secondaryTabId || !tabsRef.current.some(t => t.id === secondaryTabId))) {
-        const candidate = tabsRef.current.find(t => t.id !== activeTabIdRef.current) ?? tabsRef.current[0];
-        if (candidate) setSecondaryTabId(candidate.id);
-      }
-      return next;
-    });
-  };
-
-  const toggleDiffView = () => {
-    setViewMode(prev => {
-      const next = prev === 'diff' ? 'single' : 'diff';
-      if (next === 'diff' && (!secondaryTabId || !tabsRef.current.some(t => t.id === secondaryTabId))) {
         const candidate = tabsRef.current.find(t => t.id !== activeTabIdRef.current) ?? tabsRef.current[0];
         if (candidate) setSecondaryTabId(candidate.id);
       }
@@ -1979,10 +1968,10 @@ const App: React.FC = () => {
           </button>
           <button
             data-testid="split-view-toggle"
-            aria-label={viewMode === 'split' ? 'Close Split View' : 'Side-by-Side Split View'}
-            aria-pressed={viewMode === 'split'}
+            aria-label={viewMode !== 'single' ? 'Close Split View' : 'Side-by-Side Split View'}
+            aria-pressed={viewMode !== 'single'}
             onClick={toggleSplitView}
-            title={viewMode === 'split' ? 'Close Split View' : 'Toggle Side-by-Side Split View'}
+            title={viewMode !== 'single' ? 'Close Split View' : 'Toggle Side-by-Side Split View'}
             style={{
               width: '28px',
               height: '24px',
@@ -1993,9 +1982,9 @@ const App: React.FC = () => {
               cursor: 'pointer',
               borderRadius: '4px',
               border: `1px solid ${colors.tabHover}`,
-              backgroundColor: viewMode === 'split' ? colors.tabActiveBackground : colors.tabBackground,
+              backgroundColor: viewMode !== 'single' ? colors.tabActiveBackground : colors.tabBackground,
               color: colors.foreground,
-              opacity: viewMode === 'split' ? 1 : 0.55,
+              opacity: viewMode !== 'single' ? 1 : 0.55,
             }}
           >
             <svg
@@ -2012,98 +2001,6 @@ const App: React.FC = () => {
             >
               <rect x="2" y="2.5" width="12" height="11" rx="1.5" />
               <line x1="8" y1="2.5" x2="8" y2="13.5" />
-            </svg>
-          </button>
-          <button
-            data-testid="diff-view-toggle"
-            aria-label={viewMode === 'diff' ? 'Close Diff View' : 'Diff View (Compare Tabs)'}
-            aria-pressed={viewMode === 'diff'}
-            onClick={toggleDiffView}
-            title={viewMode === 'diff' ? 'Close Diff View' : 'Toggle Diff View (Compare Tabs)'}
-            style={{
-              width: '28px',
-              height: '24px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-              cursor: 'pointer',
-              borderRadius: '4px',
-              border: `1px solid ${colors.tabHover}`,
-              backgroundColor: viewMode === 'diff' ? colors.tabActiveBackground : colors.tabBackground,
-              color: colors.foreground,
-              opacity: viewMode === 'diff' ? 1 : 0.55,
-              fontSize: '11px',
-              fontWeight: 600,
-              fontFamily: 'monospace',
-            }}
-          >
-            ±
-          </button>
-          <button
-            data-testid="whitespace-toggle"
-            aria-label={showWhitespace ? 'Hide Whitespace & EOL' : 'Show Whitespace & EOL'}
-            aria-pressed={showWhitespace}
-            onClick={() => setShowWhitespace(prev => !prev)}
-            title={showWhitespace ? 'Hide Whitespace & EOL' : 'Show Whitespace & EOL'}
-            style={{
-              width: '28px',
-              height: '24px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-              cursor: 'pointer',
-              borderRadius: '4px',
-              border: `1px solid ${colors.tabHover}`,
-              backgroundColor: showWhitespace ? colors.tabActiveBackground : colors.tabBackground,
-              color: colors.foreground,
-              opacity: showWhitespace ? 1 : 0.55,
-              fontSize: '12px',
-              fontWeight: 600,
-              fontFamily: 'monospace',
-            }}
-          >
-            ¶
-          </button>
-          <button
-            data-testid="word-wrap-toggle"
-            aria-label={wordWrap ? 'Disable Word Wrap' : 'Enable Word Wrap'}
-            aria-pressed={wordWrap}
-            onClick={() => setWordWrap(prev => !prev)}
-            title={wordWrap ? 'Disable Word Wrap' : 'Enable Word Wrap'}
-            style={{
-              width: '28px',
-              height: '24px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-              cursor: 'pointer',
-              borderRadius: '4px',
-              border: `1px solid ${colors.tabHover}`,
-              backgroundColor: wordWrap ? colors.tabActiveBackground : colors.tabBackground,
-              color: colors.foreground,
-              opacity: wordWrap ? 1 : 0.55,
-            }}
-          >
-            {/* Word wrap icon: three lines with a curved arrow indicating wrap on the second line */}
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.25"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-              focusable="false"
-            >
-              <line x1="2" y1="3.5" x2="14" y2="3.5" />
-              <path d="M2 8h9.5a2 2 0 0 1 0 4H8" />
-              <polyline points="9.5,10 8,12 9.5,14" />
-              <line x1="2" y1="12.5" x2="5" y2="12.5" />
             </svg>
           </button>
           {activeTab && isActiveTabMarkdown && (
@@ -3133,6 +3030,73 @@ const App: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center' }}>
+        <button
+          data-testid="whitespace-toggle"
+          aria-label={showWhitespace ? 'Hide Whitespace & EOL' : 'Show Whitespace & EOL'}
+          aria-pressed={showWhitespace}
+          onClick={() => setShowWhitespace(prev => !prev)}
+          title={showWhitespace ? 'Hide Whitespace & EOL' : 'Show Whitespace & EOL'}
+          style={{
+            width: '28px',
+            height: '22px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+            cursor: 'pointer',
+            borderRadius: '4px',
+            border: `1px solid ${colors.tabHover}`,
+            backgroundColor: showWhitespace ? colors.tabActiveBackground : colors.tabBackground,
+            color: colors.foreground,
+            opacity: showWhitespace ? 1 : 0.55,
+            fontSize: '12px',
+            fontWeight: 600,
+            fontFamily: 'monospace',
+          }}
+        >
+          ¶
+        </button>
+        <button
+          data-testid="word-wrap-toggle"
+          aria-label={wordWrap ? 'Disable Word Wrap' : 'Enable Word Wrap'}
+          aria-pressed={wordWrap}
+          onClick={() => setWordWrap(prev => !prev)}
+          title={wordWrap ? 'Disable Word Wrap' : 'Enable Word Wrap'}
+          style={{
+            width: '28px',
+            height: '22px',
+            marginLeft: '4px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+            cursor: 'pointer',
+            borderRadius: '4px',
+            border: `1px solid ${colors.tabHover}`,
+            backgroundColor: wordWrap ? colors.tabActiveBackground : colors.tabBackground,
+            color: colors.foreground,
+            opacity: wordWrap ? 1 : 0.55,
+          }}
+        >
+          {/* Word wrap icon: three lines with a curved arrow indicating wrap on the second line */}
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.25"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <line x1="2" y1="3.5" x2="14" y2="3.5" />
+            <path d="M2 8h9.5a2 2 0 0 1 0 4H8" />
+            <polyline points="9.5,10 8,12 9.5,14" />
+            <line x1="2" y1="12.5" x2="5" y2="12.5" />
+          </svg>
+        </button>
         {activeTab && (
           <EncodingSelector
             encoding={activeTab.encoding ?? DEFAULT_ENCODING}

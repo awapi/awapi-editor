@@ -341,14 +341,16 @@ describe('Editor Core Tests', () => {
     expect(displayTitle).toBe('example.txt *');
   });
 
-  it('should render the word wrap toggle button', () => {
+  it('should render the word wrap toggle button in the status bar', () => {
     render(
       <ThemeProvider>
         <App />
       </ThemeProvider>
     );
+    const statusBar = screen.getByTestId('status-bar');
     const btn = screen.getByTestId('word-wrap-toggle');
     expect(btn).toBeDefined();
+    expect(statusBar.contains(btn)).toBe(true);
     expect(btn.title).toBe('Disable Word Wrap');
   });
 
@@ -1769,14 +1771,16 @@ describe('Editor Core Tests', () => {
       expect(screen.getByTestId('goto-line-modal')).toBeTruthy();
     });
 
-    it('toggles Show Whitespace & EOL from toolbar button and menu IPC', async () => {
+    it('toggles Show Whitespace & EOL from status bar button and menu IPC', async () => {
       let toggleWsCb: (() => void) | null = null;
       (window as any).electronAPI.onToggleWhitespace = vi.fn((cb) => { toggleWsCb = cb; });
 
       render(<ThemeProvider><App /></ThemeProvider>);
       await waitFor(() => screen.getByTestId('whitespace-toggle'));
 
+      const statusBar = screen.getByTestId('status-bar');
       const wsBtn = screen.getByTestId('whitespace-toggle');
+      expect(statusBar.contains(wsBtn)).toBe(true);
       expect(wsBtn.getAttribute('aria-pressed')).toBe('false');
       expect(screen.queryByTestId('status-whitespace-indicator')).toBeNull();
 
@@ -1914,8 +1918,12 @@ describe('Editor Core Tests', () => {
       render(<ThemeProvider><App /></ThemeProvider>);
       await waitFor(() => screen.getByText(/left\.ts/));
 
+      // Top-right toolbar has split-view-toggle only (no separate diff-view-toggle)
+      expect(screen.queryByTestId('diff-view-toggle')).toBeNull();
+
       // Enter Split View via toolbar toggle
       fireEvent.click(screen.getByTestId('split-view-toggle'));
+      expect(screen.getByTestId('split-view-toggle').getAttribute('aria-pressed')).toBe('true');
       expect(screen.getByTestId('split-diff-toolbar')).toBeTruthy();
       expect(screen.getByTestId('split-view-container')).toBeTruthy();
       expect(screen.getByTestId('split-left-pane')).toBeTruthy();
@@ -1927,8 +1935,9 @@ describe('Editor Core Tests', () => {
       expect(screen.getByTestId('split-primary-tab-label').textContent).toBe('right.ts');
       expect((screen.getByTestId('secondary-tab-select') as HTMLSelectElement).value).toBe('tab-1');
 
-      // Switch to Diff View via Diff mode button
+      // Switch to Diff View via Diff mode button; split-view-toggle stays active
       fireEvent.click(screen.getByTestId('diff-mode-button'));
+      expect(screen.getByTestId('split-view-toggle').getAttribute('aria-pressed')).toBe('true');
       expect(screen.getByTestId('diff-view-container')).toBeTruthy();
       expect(screen.getByTestId('mock-monaco-diff-editor')).toBeTruthy();
       expect(capturedDiffProps?.original).toBe('const a = 2;');
@@ -1990,7 +1999,8 @@ describe('Editor Core Tests', () => {
       render(<ThemeProvider><App /></ThemeProvider>);
       await waitFor(() => screen.getByText(/two\.txt/));
 
-      fireEvent.click(screen.getByTestId('diff-view-toggle'));
+      fireEvent.click(screen.getByTestId('split-view-toggle'));
+      fireEvent.click(screen.getByTestId('diff-mode-button'));
       expect(screen.getByTestId('diff-readonly-hint')).toBeTruthy();
       expect(capturedDiffProps?.options?.originalEditable).toBe(false);
       expect(typeof capturedDiffProps?.onMount).toBe('function');
@@ -2069,7 +2079,8 @@ describe('Editor Core Tests', () => {
 
       render(<ThemeProvider><App /></ThemeProvider>);
       await waitFor(() => screen.getByText(/two\.txt/));
-      fireEvent.click(screen.getByTestId('diff-view-toggle'));
+      fireEvent.click(screen.getByTestId('split-view-toggle'));
+      fireEvent.click(screen.getByTestId('diff-mode-button'));
       expect(screen.getByTestId('diff-view-container')).toBeTruthy();
 
       let originalCursorListener: ((e: { position: { lineNumber: number; column: number } }) => void) | undefined;

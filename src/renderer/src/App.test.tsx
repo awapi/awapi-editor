@@ -1371,7 +1371,7 @@ describe('Editor Core Tests', () => {
       await waitFor(() => expect(screen.getByTestId('shortcuts-modal')).toBeTruthy());
     });
 
-    it('opens Getting Started & Help modal via onOpenHelp IPC or the tab-bar ? button', async () => {
+    it('opens Getting Started & Help modal via onOpenHelp IPC and does not render the tab-bar ? button', async () => {
       let openHelpCb: (() => void) | null = null;
       (window as any).electronAPI.onOpenHelp = vi.fn((cb: () => void) => {
         openHelpCb = cb;
@@ -1380,17 +1380,16 @@ describe('Editor Core Tests', () => {
       render(<ThemeProvider><App /></ThemeProvider>);
       await waitFor(() => screen.getByText('alpha.txt'));
 
-      fireEvent.click(screen.getByTestId('help-toggle'));
-      await waitFor(() => expect(screen.getByTestId('help-modal')).toBeTruthy());
-
-      fireEvent.click(screen.getByTestId('help-close-btn'));
-      await waitFor(() => expect(screen.queryByTestId('help-modal')).toBeNull());
+      expect(screen.queryByTestId('help-toggle')).toBeNull();
 
       await waitFor(() => expect(openHelpCb).not.toBeNull());
       act(() => {
         openHelpCb!();
       });
       await waitFor(() => expect(screen.getByTestId('help-modal')).toBeTruthy());
+
+      fireEvent.click(screen.getByTestId('help-close-btn'));
+      await waitFor(() => expect(screen.queryByTestId('help-modal')).toBeNull());
     });
   });
 
@@ -1827,7 +1826,11 @@ describe('Editor Core Tests', () => {
       await waitFor(() => expect(screen.getByTestId('status-total-characters').textContent).toBe('Chars 5'));
     });
 
-    it('searches and replaces across all open tabs using FindInTabsPanel', async () => {
+    it('searches and replaces across all open tabs using FindInTabsPanel via onFindInTabs IPC and does not render the tab-bar search button', async () => {
+      let findInTabsCb: (() => void) | null = null;
+      (window as any).electronAPI.onFindInTabs = vi.fn((cb: () => void) => {
+        findInTabsCb = cb;
+      });
       (window as any).electronAPI.loadSession.mockResolvedValue({
         activeTabId: 'tab-1',
         tabs: [
@@ -1839,8 +1842,13 @@ describe('Editor Core Tests', () => {
       render(<ThemeProvider><App /></ThemeProvider>);
       await waitFor(() => screen.getByText(/first\.txt/));
 
-      // Open panel via toolbar button
-      fireEvent.click(screen.getByTestId('find-in-tabs-toggle'));
+      expect(screen.queryByTestId('find-in-tabs-toggle')).toBeNull();
+
+      // Open panel via Edit -> Find in Open Tabs menu IPC
+      await waitFor(() => expect(findInTabsCb).not.toBeNull());
+      act(() => {
+        findInTabsCb!();
+      });
       expect(screen.getByTestId('find-in-tabs-panel')).toBeTruthy();
 
       fireEvent.change(screen.getByTestId('find-in-tabs-query'), { target: { value: 'apple' } });
@@ -1861,34 +1869,29 @@ describe('Editor Core Tests', () => {
   });
 
   describe('Phase 3: View & Encoding', () => {
-    it('toggles Always on Top from the toolbar button and responds to menu IPC updates', async () => {
+    it('responds to Always on Top menu IPC updates and does not render the tab-bar pin button', async () => {
       let alwaysOnTopChangedCb: ((flag: boolean) => void) | undefined;
       (window as any).electronAPI.onAlwaysOnTopChanged = vi.fn((cb: (flag: boolean) => void) => {
         alwaysOnTopChangedCb = cb;
       });
-      (window as any).electronAPI.toggleAlwaysOnTop = vi.fn()
-        .mockResolvedValueOnce(true)
-        .mockResolvedValueOnce(false);
 
       render(<ThemeProvider><App /></ThemeProvider>);
-      await waitFor(() => screen.getByTestId('always-on-top-toggle'));
+      await waitFor(() => screen.getByTestId('split-view-toggle'));
 
-      const pinBtn = screen.getByTestId('always-on-top-toggle');
-      expect(pinBtn.getAttribute('aria-pressed')).toBe('false');
+      expect(screen.queryByTestId('always-on-top-toggle')).toBeNull();
       expect(screen.queryByTestId('status-always-on-top')).toBeNull();
 
-      // Click toolbar pin button -> enables Always on Top
-      fireEvent.click(pinBtn);
-      await waitFor(() => expect(pinBtn.getAttribute('aria-pressed')).toBe('true'));
-      expect((window as any).electronAPI.toggleAlwaysOnTop).toHaveBeenCalledTimes(1);
-      expect(screen.getByTestId('status-always-on-top').textContent).toContain('Pinned');
+      // Menu event enables Always on Top
+      act(() => {
+        alwaysOnTopChangedCb?.(true);
+      });
+      await waitFor(() => expect(screen.getByTestId('status-always-on-top').textContent).toContain('Pinned'));
 
       // Menu event disables Always on Top
       act(() => {
         alwaysOnTopChangedCb?.(false);
       });
-      await waitFor(() => expect(pinBtn.getAttribute('aria-pressed')).toBe('false'));
-      expect(screen.queryByTestId('status-always-on-top')).toBeNull();
+      await waitFor(() => expect(screen.queryByTestId('status-always-on-top')).toBeNull());
     });
 
     it('toggles Side-by-Side Split View and Diff View across two open tabs', async () => {
@@ -2426,7 +2429,17 @@ describe('Editor Core Tests', () => {
       act(() => {
         toggleExplorerCb?.();
       });
-      expect(screen.getByTestId('file-explorer-sidebar')).toBeTruthy();
+      const explorerSidebar = screen.getByTestId('file-explorer-sidebar');
+      const workspaceRow = screen.getByTestId('workspace-row');
+      const editorColumn = screen.getByTestId('editor-column');
+      const tabBar = screen.getByTestId('tab-bar');
+      expect(explorerSidebar).toBeTruthy();
+      // VS Code layout: Explorer sidebar is a sibling of the editor column (not below the tab bar),
+      // and the tab bar lives inside the editor column to the right of the Explorer.
+      expect(workspaceRow.firstElementChild).toBe(explorerSidebar);
+      expect(workspaceRow.contains(editorColumn)).toBe(true);
+      expect(editorColumn.contains(tabBar)).toBe(true);
+      expect(explorerSidebar.contains(tabBar)).toBe(false);
 
       // Toggle off via toolbar button
       fireEvent.click(screen.getByTestId('explorer-toggle'));

@@ -1560,20 +1560,6 @@ const App: React.FC = () => {
     }
   };
 
-  const handleToggleAlwaysOnTop = async () => {
-    const w = window as any;
-    if (w.electronAPI?.toggleAlwaysOnTop) {
-      try {
-        const next = await w.electronAPI.toggleAlwaysOnTop();
-        setAlwaysOnTop(Boolean(next));
-        return;
-      } catch {
-        // Fall through to local toggle if IPC fails
-      }
-    }
-    setAlwaysOnTop(prev => !prev);
-  };
-
   const toggleSplitView = () => {
     setViewMode(prev => {
       const next = prev === 'split' ? 'single' : 'split';
@@ -1834,9 +1820,41 @@ const App: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: colors.background, color: colors.foreground }}>
+      {/* Workspace Row: File Explorer Sidebar + Editor Column (Tab Bar + Editor Area) */}
+      <div
+        data-testid="workspace-row"
+        style={{ display: 'flex', flexGrow: 1, minHeight: 0, overflow: 'hidden' }}
+      >
+      {!isPopoutMode && (
+        <FileExplorer
+          isOpen={isExplorerOpen}
+          rootFolderPath={explorerFolderPath}
+          tabs={tabs}
+          activeTabId={activeTabId}
+          onSelectTab={setActiveTabId}
+          onPinTab={pinTab}
+          onCloseTab={closeTab}
+          onOpenFileFromTree={handleOpenFileFromExplorer}
+          onPickFolder={() => { void handlePickExplorerFolder(); }}
+          onCloseExplorer={() => setIsExplorerOpen(false)}
+          onChangeRootFolder={setExplorerFolderPath}
+          onItemRenamed={handleExplorerItemRenamed}
+          onItemDeleted={handleExplorerItemDeleted}
+          refreshToken={explorerRefreshToken}
+        />
+      )}
+
+      {/* Editor Column: Tab Bar + Toolbars + Editor Area */}
+      <div
+        data-testid="editor-column"
+        style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, minHeight: 0, overflow: 'hidden' }}
+      >
       {/* Tab Bar: hidden in popout (single-file) mode */}
       {!isPopoutMode && (
-      <div style={{ display: 'flex', backgroundColor: colors.tabBackground, flexShrink: 0 }}>
+      <div
+        data-testid="tab-bar"
+        style={{ display: 'flex', backgroundColor: colors.tabBackground, flexShrink: 0 }}
+      >
         {/* Scrollable tab strip. minWidth:0 is required so this flex child can
             shrink below its content width instead of pushing siblings off-screen. */}
         <div
@@ -1960,43 +1978,6 @@ const App: React.FC = () => {
             </svg>
           </button>
           <button
-            data-testid="always-on-top-toggle"
-            aria-label={alwaysOnTop ? 'Unpin Window (Disable Always on Top)' : 'Pin Window (Always on Top)'}
-            aria-pressed={alwaysOnTop}
-            onClick={handleToggleAlwaysOnTop}
-            title={alwaysOnTop ? 'Unpin Window (Always on Top active)' : 'Pin Window Always on Top'}
-            style={{
-              width: '28px',
-              height: '24px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-              cursor: 'pointer',
-              borderRadius: '4px',
-              border: `1px solid ${colors.tabHover}`,
-              backgroundColor: alwaysOnTop ? colors.tabActiveBackground : colors.tabBackground,
-              color: colors.foreground,
-              opacity: alwaysOnTop ? 1 : 0.55,
-            }}
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-              focusable="false"
-            >
-              <path d="M5 2.5h6l-1 4 2 2v1H4v-1l2-2-1-4z" />
-              <line x1="8" y1="9.5" x2="8" y2="14" />
-            </svg>
-          </button>
-          <button
             data-testid="split-view-toggle"
             aria-label={viewMode === 'split' ? 'Close Split View' : 'Side-by-Side Split View'}
             aria-pressed={viewMode === 'split'}
@@ -2058,43 +2039,6 @@ const App: React.FC = () => {
             }}
           >
             ±
-          </button>
-          <button
-            data-testid="find-in-tabs-toggle"
-            aria-label={isFindInTabsOpen ? 'Close Find in Open Tabs' : 'Find in All Open Tabs'}
-            aria-pressed={isFindInTabsOpen}
-            onClick={() => setIsFindInTabsOpen(prev => !prev)}
-            title="Find in All Open Tabs (Cmd/Ctrl+Shift+F)"
-            style={{
-              width: '28px',
-              height: '24px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-              cursor: 'pointer',
-              borderRadius: '4px',
-              border: `1px solid ${colors.tabHover}`,
-              backgroundColor: isFindInTabsOpen ? colors.tabActiveBackground : colors.tabBackground,
-              color: colors.foreground,
-              opacity: isFindInTabsOpen ? 1 : 0.55,
-            }}
-          >
-            <svg
-              width="15"
-              height="15"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-              focusable="false"
-            >
-              <circle cx="7" cy="7" r="4.5" />
-              <line x1="10.5" y1="10.5" x2="14" y2="14" />
-            </svg>
           </button>
           <button
             data-testid="whitespace-toggle"
@@ -2208,32 +2152,6 @@ const App: React.FC = () => {
               <span>Preview</span>
             </button>
           )}
-          <button
-            data-testid="help-toggle"
-            aria-label={isHelpOpen ? 'Close Getting Started & Help' : 'Getting Started & Help'}
-            aria-pressed={isHelpOpen}
-            onClick={() => setIsHelpOpen(prev => !prev)}
-            title="Getting Started & Help"
-            style={{
-              width: '28px',
-              height: '24px',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-              cursor: 'pointer',
-              borderRadius: '4px',
-              border: `1px solid ${colors.tabHover}`,
-              backgroundColor: isHelpOpen ? colors.tabActiveBackground : colors.tabBackground,
-              color: colors.foreground,
-              opacity: isHelpOpen ? 1 : 0.55,
-              fontSize: '12px',
-              fontWeight: 700,
-              fontFamily: 'monospace',
-            }}
-          >
-            ?
-          </button>
         </div>
       </div>
       )} {/* end !isPopoutMode tab bar */}
@@ -2427,29 +2345,8 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Workspace Row: File Explorer Sidebar + Editor Area */}
-      <div style={{ display: 'flex', flexGrow: 1, minHeight: 0, overflow: 'hidden' }}>
-      {!isPopoutMode && (
-        <FileExplorer
-          isOpen={isExplorerOpen}
-          rootFolderPath={explorerFolderPath}
-          tabs={tabs}
-          activeTabId={activeTabId}
-          onSelectTab={setActiveTabId}
-          onPinTab={pinTab}
-          onCloseTab={closeTab}
-          onOpenFileFromTree={handleOpenFileFromExplorer}
-          onPickFolder={() => { void handlePickExplorerFolder(); }}
-          onCloseExplorer={() => setIsExplorerOpen(false)}
-          onChangeRootFolder={setExplorerFolderPath}
-          onItemRenamed={handleExplorerItemRenamed}
-          onItemDeleted={handleExplorerItemDeleted}
-          refreshToken={explorerRefreshToken}
-        />
-      )}
-
       {/* Editor Area */}
-      <div style={{ flexGrow: 1, minWidth: 0, overflow: 'hidden', backgroundColor: activeTab ? surfaceBgFor(activeTab.themeOverride) : undefined }}>
+      <div style={{ flexGrow: 1, minWidth: 0, minHeight: 0, overflow: 'hidden', backgroundColor: activeTab ? surfaceBgFor(activeTab.themeOverride) : undefined }}>
         {activeTab ? (
           !isPopoutMode && viewMode === 'split' && secondaryTab ? (
             <div
@@ -2622,6 +2519,7 @@ const App: React.FC = () => {
           </div>
         )}
       </div>
+      </div>{/* end Editor Column */}
       </div>{/* end Workspace Row */}
 
       {!isPopoutMode && (

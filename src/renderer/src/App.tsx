@@ -22,6 +22,7 @@ import {
 } from '../../shared/encodings';
 import { inferLanguageFromFilename } from './languages';
 import { isCsvTab } from './csv';
+import { isMarkdownTab } from './markdown';
 import CsvGridEditor from './CsvGridEditor';
 import TerminalPanel from './TerminalPanel';
 import { useTerminalSessions } from './useTerminalSessions';
@@ -76,6 +77,7 @@ const App: React.FC = () => {
   const [isGoToLineOpen, setIsGoToLineOpen] = useState(false);
   const [isFindInTabsOpen, setIsFindInTabsOpen] = useState(false);
   const [isExplorerOpen, setIsExplorerOpen] = useState(false);
+  const [isMarkdownPreviewOpen, setIsMarkdownPreviewOpen] = useState(false);
   const [explorerFolderPath, setExplorerFolderPath] = useState<string | null>(null);
   const [explorerRefreshToken, setExplorerRefreshToken] = useState(0);
   const explorerSettingsReadyRef = React.useRef(false);
@@ -866,6 +868,30 @@ const App: React.FC = () => {
         if (id) handlePopout(id);
       });
 
+      w.electronAPI.onMarkdownPreview?.(() => {
+        const id = activeTabIdRef.current;
+        if (id) openMarkdownPreviewForTab(id);
+      });
+
+      w.electronAPI.onMarkdownPreviewVisibilityChanged?.((isOpen: boolean) => {
+        setIsMarkdownPreviewOpen(Boolean(isOpen));
+      });
+
+      if (w.electronAPI.getMarkdownPreviewOpen) {
+        Promise.resolve(w.electronAPI.getMarkdownPreviewOpen())
+          .then((flag: boolean) => setIsMarkdownPreviewOpen(Boolean(flag)))
+          .catch(() => {});
+      }
+
+      const syncPreviewOpenOnFocus = () => {
+        if (w.electronAPI?.getMarkdownPreviewOpen) {
+          Promise.resolve(w.electronAPI.getMarkdownPreviewOpen())
+            .then((flag: boolean) => setIsMarkdownPreviewOpen(Boolean(flag)))
+            .catch(() => {});
+        }
+      };
+      window.addEventListener('focus', syncPreviewOpenOnFocus);
+
       if (isPopoutMode) {
         // Main intercepted a close of this (dirty) pop-out window: run the same
         // Save / Don't Save / Cancel flow used when closing a tab.
@@ -1022,6 +1048,7 @@ const App: React.FC = () => {
       // Cleanup on unmount
       return () => {
         w.electronAPI.removeListeners();
+        window.removeEventListener('focus', syncPreviewOpenOnFocus);
         window.removeEventListener('dragover', preventDefault, true);
         window.removeEventListener('dragenter', preventDefault, true);
         window.removeEventListener('drop', handleGlobalDrop, true);
@@ -1380,7 +1407,73 @@ const App: React.FC = () => {
   const effectiveLanguage = activeTab?.language ?? inferredLanguage;
   const isLanguageInferred = !activeTab?.language;
   const isActiveTabCsv = activeTab ? isCsvTab(activeTab.filePath ?? activeTab.title, effectiveLanguage) : false;
+  const isActiveTabMarkdown = activeTab
+    ? isMarkdownTab(activeTab.filePath ?? activeTab.title, effectiveLanguage)
+    : false;
   const activeCsvViewMode = activeTab?.csvViewMode ?? 'grid';
+
+  const currentThemeRef = React.useRef(currentTheme);
+  currentThemeRef.current = currentTheme;
+
+  const buildMarkdownPreviewPayload = React.useCallback((tab: Tab) => {
+    const resolvedTheme: 'light' | 'dark' =
+      tab.themeOverride ?? (currentThemeRef.current === 'light' ? 'light' : 'dark');
+    return {
+      title: tab.title,
+      filePath: tab.filePath,
+      content: tab.content,
+      theme: resolvedTheme,
+    };
+  }, []);
+
+  const openMarkdownPreviewForTab = React.useCallback(
+    (tabId: string) => {
+      const tab = tabsRef.current.find(t => t.id === tabId);
+      if (!tab) return;
+      if (tabId !== activeTabIdRef.current) {
+        setActiveTabId(tabId);
+      }
+      setTabContextMenu(null);
+      const w = window as any;
+      Promise.resolve(w.electronAPI?.openMarkdownPreview?.(buildMarkdownPreviewPayload(tab)))
+        .then((result: unknown) => {
+          if (typeof result === 'boolean') {
+            setIsMarkdownPreviewOpen(result);
+          } else {
+            setIsMarkdownPreviewOpen(prev => !prev);
+          }
+        })
+        .catch(() => {});
+    },
+    [buildMarkdownPreviewPayload],
+  );
+
+  // Live-refresh the Markdown preview popup whenever the active Markdown tab's
+  // content, title, filePath, or theme changes.
+  useEffect(() => {
+    if (!activeTab || !isActiveTabMarkdown) return;
+    const w = window as any;
+    if (!w.electronAPI?.updateMarkdownPreview) return;
+    const resolvedTheme: 'light' | 'dark' =
+      activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark');
+    const timer = setTimeout(() => {
+      void w.electronAPI?.updateMarkdownPreview?.({
+        title: activeTab.title,
+        filePath: activeTab.filePath,
+        content: activeTab.content,
+        theme: resolvedTheme,
+      });
+    }, 60);
+    return () => clearTimeout(timer);
+  }, [
+    activeTab?.id,
+    activeTab?.title,
+    activeTab?.filePath,
+    activeTab?.content,
+    activeTab?.themeOverride,
+    isActiveTabMarkdown,
+    currentTheme,
+  ]);
 
   const setActiveTabCsvViewMode = (mode: 'grid' | 'text') => {
     if (!activeTabId) return;
@@ -2069,6 +2162,52 @@ const App: React.FC = () => {
               <line x1="2" y1="12.5" x2="5" y2="12.5" />
             </svg>
           </button>
+          {activeTab && isActiveTabMarkdown && (
+            <button
+              data-testid="markdown-preview-button"
+              aria-label={isMarkdownPreviewOpen ? 'Close Markdown Preview' : 'Open Markdown Preview'}
+              aria-pressed={isMarkdownPreviewOpen}
+              onClick={() => openMarkdownPreviewForTab(activeTab.id)}
+              title={
+                isMarkdownPreviewOpen
+                  ? 'Close Markdown Preview Popup (Cmd/Ctrl+Shift+V)'
+                  : 'Open Markdown Preview in Popup Window (Cmd/Ctrl+Shift+V)'
+              }
+              style={{
+                height: '24px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '4px',
+                padding: '0 8px',
+                cursor: 'pointer',
+                borderRadius: '4px',
+                border: `1px solid ${isMarkdownPreviewOpen ? colors.tabBorder : colors.tabHover}`,
+                backgroundColor: isMarkdownPreviewOpen ? colors.tabActiveBackground : colors.tabBackground,
+                color: colors.foreground,
+                opacity: isMarkdownPreviewOpen ? 1 : 0.55,
+                fontSize: '11px',
+                fontWeight: 600,
+              }}
+            >
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8s-2.4 4.5-6.5 4.5S1.5 8 1.5 8z" />
+                <circle cx="8" cy="8" r="2" />
+              </svg>
+              <span>Preview</span>
+            </button>
+          )}
           <button
             data-testid="help-toggle"
             aria-label={isHelpOpen ? 'Close Getting Started & Help' : 'Getting Started & Help'}
@@ -2106,6 +2245,7 @@ const App: React.FC = () => {
           style={{
             display: 'flex',
             alignItems: 'center',
+            justifyContent: 'space-between',
             padding: '6px 14px',
             backgroundColor: colors.tabBackground,
             borderBottom: `1px solid ${colors.tabHover}`,
@@ -2115,14 +2255,47 @@ const App: React.FC = () => {
             userSelect: 'none',
           }}
         >
-          {activeTab.title}{activeTab.isDirty && ' *'}
-          {activeTab.filePath && (
-            <span
-              style={{ marginLeft: 10, opacity: 0.5, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-              title={activeTab.filePath}
+          <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, overflow: 'hidden' }}>
+            <span>{activeTab.title}{activeTab.isDirty && ' *'}</span>
+            {activeTab.filePath && (
+              <span
+                style={{ marginLeft: 10, opacity: 0.5, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                title={activeTab.filePath}
+              >
+                {activeTab.filePath}
+              </span>
+            )}
+          </div>
+          {isActiveTabMarkdown && (
+            <button
+              data-testid="markdown-preview-button"
+              aria-label={isMarkdownPreviewOpen ? 'Close Markdown Preview' : 'Open Markdown Preview'}
+              aria-pressed={isMarkdownPreviewOpen}
+              onClick={() => openMarkdownPreviewForTab(activeTab.id)}
+              title={
+                isMarkdownPreviewOpen
+                  ? 'Close Markdown Preview Popup (Cmd/Ctrl+Shift+V)'
+                  : 'Open Markdown Preview in Popup Window (Cmd/Ctrl+Shift+V)'
+              }
+              style={{
+                height: '22px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '0 8px',
+                cursor: 'pointer',
+                borderRadius: '4px',
+                border: `1px solid ${isMarkdownPreviewOpen ? colors.tabBorder : colors.tabHover}`,
+                backgroundColor: isMarkdownPreviewOpen ? colors.tabActiveBackground : colors.tabBackground,
+                color: colors.foreground,
+                opacity: isMarkdownPreviewOpen ? 1 : 0.55,
+                fontSize: '11px',
+                fontWeight: 600,
+                flexShrink: 0,
+              }}
             >
-              {activeTab.filePath}
-            </span>
+              Preview
+            </button>
           )}
         </div>
       )}
@@ -2525,6 +2698,38 @@ const App: React.FC = () => {
               <span>Pop out to new window</span>
               <span style={{ opacity: 0.45, fontSize: '11px', flexShrink: 0 }}>Ctrl+Shift+N</span>
             </div>
+            {(() => {
+              const target = tabs.find(t => t.id === tabContextMenu.tabId);
+              const targetLang =
+                target?.language ??
+                inferLanguageFromFilename(target?.filePath ?? target?.title);
+              if (!target || !isMarkdownTab(target.filePath ?? target.title, targetLang)) {
+                return null;
+              }
+              return (
+                <div
+                  role="menuitem"
+                  data-testid="tab-context-markdown-preview"
+                  onClick={() => openMarkdownPreviewForTab(tabContextMenu.tabId)}
+                  onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent'; }}
+                  style={{
+                    padding: '7px 16px',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    color: colors.foreground,
+                    backgroundColor: 'transparent',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '24px',
+                  }}
+                >
+                  <span>Open Markdown Preview</span>
+                  <span style={{ opacity: 0.45, fontSize: '11px', flexShrink: 0 }}>Ctrl+Shift+V</span>
+                </div>
+              );
+            })()}
             <div
               role="menuitem"
               data-testid="tab-context-split-view"

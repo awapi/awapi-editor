@@ -230,6 +230,36 @@ declare global {
         encoding?: EncodingKind;
       }) => void) => void;
 
+      openMarkdownPreview: (data: {
+        title: string;
+        filePath: string | null;
+        content: string;
+        theme?: 'light' | 'dark';
+      }) => Promise<boolean | void>;
+      updateMarkdownPreview: (data: {
+        title: string;
+        filePath: string | null;
+        content: string;
+        theme?: 'light' | 'dark';
+      }) => Promise<void>;
+      getMarkdownPreviewData: () => Promise<{
+        title: string;
+        filePath: string | null;
+        content: string;
+        theme?: 'light' | 'dark';
+      } | null>;
+      onMarkdownPreviewUpdate: (
+        callback: (data: {
+          title: string;
+          filePath: string | null;
+          content: string;
+          theme?: 'light' | 'dark';
+        }) => void
+      ) => () => void;
+      onMarkdownPreview: (callback: () => void) => void;
+      getMarkdownPreviewOpen: () => Promise<boolean>;
+      onMarkdownPreviewVisibilityChanged: (callback: (isOpen: boolean) => void) => void;
+
       removeListeners: () => void;
     };
   }

@@ -2483,4 +2483,114 @@ describe('Editor Core Tests', () => {
       ).toBe(true);
     });
   });
+
+  describe('Markdown Preview popup integration', () => {
+    it('shows the Preview button and context menu option for Markdown tabs and syncs live updates', async () => {
+      const api = (window as any).electronAPI;
+      let markdownMenuCb: (() => void) | undefined;
+      let previewVisibilityCb: ((isOpen: boolean) => void) | undefined;
+      api.onMarkdownPreview = vi.fn((cb: () => void) => {
+        markdownMenuCb = cb;
+      });
+      api.onMarkdownPreviewVisibilityChanged = vi.fn((cb: (isOpen: boolean) => void) => {
+        previewVisibilityCb = cb;
+      });
+      let previewOpenState = false;
+      api.openMarkdownPreview = vi.fn().mockImplementation(async () => {
+        previewOpenState = !previewOpenState;
+        return previewOpenState;
+      });
+      api.updateMarkdownPreview = vi.fn().mockResolvedValue(undefined);
+      api.readFile = vi.fn(async (filePath: string) => ({
+        filePath,
+        content: filePath.endsWith('.md') ? '# Initial Doc' : 'console.log(1);',
+        eol: 'LF',
+        encoding: 'utf-8',
+      }));
+      api.loadSession.mockResolvedValue({
+        activeTabId: 'tab-md',
+        tabs: [
+          {
+            id: 'tab-md',
+            title: 'README.md',
+            filePath: '/workspace/README.md',
+            content: '# Initial Doc',
+            isDirty: false,
+            eol: 'LF',
+          },
+          {
+            id: 'tab-js',
+            title: 'index.js',
+            filePath: '/workspace/index.js',
+            content: 'console.log(1);',
+            isDirty: false,
+            eol: 'LF',
+          },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/README\.md/));
+
+      // Preview button is visible when README.md is active and starts unpressed
+      const previewBtn = screen.getByTestId('markdown-preview-button');
+      expect(previewBtn).toBeTruthy();
+      expect(previewBtn.getAttribute('aria-pressed')).toBe('false');
+
+      // First click opens the preview and marks the toggle button active
+      fireEvent.click(previewBtn);
+      expect(api.openMarkdownPreview).toHaveBeenCalledWith({
+        title: 'README.md',
+        filePath: '/workspace/README.md',
+        content: '# Initial Doc',
+        theme: 'dark',
+      });
+      await waitFor(() => expect(previewBtn.getAttribute('aria-pressed')).toBe('true'));
+
+      // Second click toggles the preview closed
+      fireEvent.click(previewBtn);
+      await waitFor(() => expect(previewBtn.getAttribute('aria-pressed')).toBe('false'));
+
+      // External close/open broadcast from main updates the button state
+      act(() => {
+        previewVisibilityCb?.(true);
+      });
+      expect(previewBtn.getAttribute('aria-pressed')).toBe('true');
+
+      // Editing the markdown content sends a live update to the preview popup
+      act(() => {
+        capturedEditorOnChange?.('# Updated Live Content');
+      });
+      await waitFor(() => {
+        expect(api.updateMarkdownPreview).toHaveBeenCalledWith({
+          title: 'README.md',
+          filePath: '/workspace/README.md',
+          content: '# Updated Live Content',
+          theme: 'dark',
+        });
+      });
+
+      // Right-clicking README.md shows "Open Markdown Preview" in the tab context menu
+      fireEvent.contextMenu(screen.getByText(/README\.md/));
+      const contextItem = screen.getByTestId('tab-context-markdown-preview');
+      expect(contextItem).toBeTruthy();
+      fireEvent.click(contextItem);
+      expect(api.openMarkdownPreview).toHaveBeenLastCalledWith({
+        title: 'README.md',
+        filePath: '/workspace/README.md',
+        content: '# Updated Live Content',
+        theme: 'dark',
+      });
+
+      // Triggering via View -> Open Markdown Preview menu IPC also toggles preview
+      act(() => {
+        markdownMenuCb?.();
+      });
+      expect(api.openMarkdownPreview).toHaveBeenCalledTimes(4);
+
+      // Switching to a non-Markdown tab hides the toolbar Preview button
+      fireEvent.click(screen.getByText(/index\.js/));
+      expect(screen.queryByTestId('markdown-preview-button')).toBeNull();
+    });
+  });
 });

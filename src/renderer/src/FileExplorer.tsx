@@ -434,13 +434,16 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     }
   };
 
-  const handleStartRenameFromContextMenu = () => {
-    if (!contextMenu?.entry) return;
-    const { entry } = contextMenu;
+  const startRename = (entry: ExplorerEntry) => {
     setContextMenu(null);
     setRenameTarget(entry);
     setRenameInput(entry.name);
     setRenameError(null);
+  };
+
+  const handleStartRenameFromContextMenu = () => {
+    if (!contextMenu?.entry) return;
+    startRename(contextMenu.entry);
   };
 
   const closeRenameModal = () => {
@@ -515,12 +518,15 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     closeRenameModal();
   };
 
-  const handleStartDeleteFromContextMenu = () => {
-    if (!contextMenu?.entry) return;
-    const { entry } = contextMenu;
+  const startDelete = (entry: ExplorerEntry) => {
     setContextMenu(null);
     setDeleteTarget(entry);
     setDeleteError(null);
+  };
+
+  const handleStartDeleteFromContextMenu = () => {
+    if (!contextMenu?.entry) return;
+    startDelete(contextMenu.entry);
   };
 
   const closeDeleteModal = () => {
@@ -598,6 +604,17 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     return false;
   };
 
+  const handleTreeItemKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, entry: ExplorerEntry) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (e.key === 'F2') {
+      e.preventDefault();
+      startRename(entry);
+    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      startDelete(entry);
+    }
+  };
+
   const renderTreeEntries = (dirPath: string, depth: number): React.ReactNode => {
     const entries = entriesByDir[normalizePathForCompare(dirPath)];
     if (!entries) return null;
@@ -611,13 +628,19 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
             <div
               role="treeitem"
               aria-expanded={expanded}
+              tabIndex={-1}
               data-testid={`explorer-folder-${entry.name}`}
               data-path={entry.path}
               title={entry.path}
-              onClick={() => toggleDirectory(entry.path)}
+              onClick={e => {
+                e.currentTarget.focus();
+                toggleDirectory(entry.path);
+              }}
+              onKeyDown={e => handleTreeItemKeyDown(e, entry)}
               onContextMenu={e => {
                 e.preventDefault();
                 e.stopPropagation();
+                e.currentTarget.focus();
                 setContextMenu({ entry, targetDirPath: entry.path, x: e.clientX, y: e.clientY });
               }}
               onMouseEnter={e => {
@@ -697,14 +720,20 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
           key={entry.path}
           role="treeitem"
           aria-selected={isSelected}
+          tabIndex={-1}
           data-testid={`explorer-file-${entry.name}`}
           data-path={entry.path}
           title={entry.path}
-          onClick={() => onOpenFileFromTree(entry.path, { preview: true })}
+          onClick={e => {
+            e.currentTarget.focus();
+            onOpenFileFromTree(entry.path, { preview: true });
+          }}
+          onKeyDown={e => handleTreeItemKeyDown(e, entry)}
           onDoubleClick={() => onOpenFileFromTree(entry.path, { preview: false })}
           onContextMenu={e => {
             e.preventDefault();
             e.stopPropagation();
+            e.currentTarget.focus();
             setContextMenu({
               entry,
               targetDirPath: getParentDirPath(entry.path),

@@ -25,6 +25,10 @@ describe('ShortcutsModal', () => {
     expect(screen.getByText('Cmd/Ctrl + W')).toBeTruthy();
     expect(screen.getByText('Reopen Closed Tab')).toBeTruthy();
     expect(screen.getByText('Cmd/Ctrl + Shift + T')).toBeTruthy();
+    expect(screen.getByText('Rename Selected Item')).toBeTruthy();
+    expect(screen.getByText('F2')).toBeTruthy();
+    expect(screen.getByText('Delete Selected Item')).toBeTruthy();
+    expect(screen.getByText('Delete / Backspace')).toBeTruthy();
     expect(screen.getByText('Middle-Click Tab')).toBeTruthy();
   });
 

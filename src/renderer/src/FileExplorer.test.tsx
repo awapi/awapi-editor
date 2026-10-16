@@ -379,6 +379,94 @@ describe('FileExplorer component', () => {
     expect(onItemDeleted).toHaveBeenCalledWith('/workspace/awapi-editor/README.md', false);
   });
 
+  it('renames and opens the delete confirmation for the focused tree item with keyboard shortcuts', async () => {
+    const onItemRenamed = vi.fn();
+    const onItemDeleted = vi.fn();
+
+    (window as any).electronAPI.renameFile = vi.fn(async (oldPath: string, newName: string) => {
+      const parent = getParentDirPath(oldPath);
+      const newPath = `${parent}/${newName}`;
+      const list = dirData.get(parent) ?? [];
+      dirData.set(
+        parent,
+        list.map(item => (item.path === oldPath ? { ...item, name: newName, path: newPath } : item)),
+      );
+      return { ok: true, newPath };
+    });
+    (window as any).electronAPI.deletePath = vi.fn(async (targetPath: string) => {
+      const parent = getParentDirPath(targetPath);
+      const list = dirData.get(parent) ?? [];
+      dirData.set(parent, list.filter(item => item.path !== targetPath));
+      return { ok: true };
+    });
+
+    render(
+      <ThemeProvider>
+        <FileExplorer
+          isOpen={true}
+          rootFolderPath="/workspace/awapi-editor"
+          tabs={[]}
+          activeTabId={null}
+          onSelectTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onOpenFileFromTree={vi.fn()}
+          onPickFolder={vi.fn()}
+          onCloseExplorer={vi.fn()}
+          onItemRenamed={onItemRenamed}
+          onItemDeleted={onItemDeleted}
+        />
+      </ThemeProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('explorer-file-package.json')).toBeTruthy();
+      expect(screen.getByTestId('explorer-file-README.md')).toBeTruthy();
+    });
+
+    const packageFile = screen.getByTestId('explorer-file-package.json');
+    fireEvent.click(packageFile);
+    expect(document.activeElement).toBe(packageFile);
+    fireEvent.keyDown(packageFile, { key: 'F2' });
+    const renameInput = screen.getByTestId('explorer-rename-input') as HTMLInputElement;
+    fireEvent.change(renameInput, { target: { value: 'package.backup.json' } });
+    fireEvent.click(screen.getByTestId('explorer-rename-submit'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('explorer-file-package.backup.json')).toBeTruthy();
+    });
+    expect(onItemRenamed).toHaveBeenCalledWith(
+      '/workspace/awapi-editor/package.json',
+      '/workspace/awapi-editor/package.backup.json',
+      'package.backup.json',
+      false,
+    );
+
+    const readmeFile = screen.getByTestId('explorer-file-README.md');
+    fireEvent.click(readmeFile);
+    fireEvent.keyDown(readmeFile, { key: 'Backspace' });
+    expect(screen.getByTestId('explorer-delete-modal')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('explorer-delete-confirm'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('explorer-file-README.md')).toBeNull();
+    });
+    expect(onItemDeleted).toHaveBeenCalledWith('/workspace/awapi-editor/README.md', false);
+
+    const renamedFile = screen.getByTestId('explorer-file-package.backup.json');
+    fireEvent.click(renamedFile);
+    fireEvent.keyDown(renamedFile, { key: 'Delete' });
+    expect(screen.getByTestId('explorer-delete-modal')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('explorer-delete-confirm'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('explorer-file-package.backup.json')).toBeNull();
+    });
+    expect(onItemDeleted).toHaveBeenLastCalledWith(
+      '/workspace/awapi-editor/package.backup.json',
+      false,
+    );
+  });
+
   it('creates a new file or folder via right-click on a folder or empty tree space', async () => {
     const onOpenFileFromTree = vi.fn();
 

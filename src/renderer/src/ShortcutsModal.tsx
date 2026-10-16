@@ -54,6 +54,13 @@ const SHORTCUT_SECTIONS: ShortcutSection[] = [
     ],
   },
   {
+    title: 'File Explorer',
+    items: [
+      { action: 'Rename Selected Item', shortcut: 'F2' },
+      { action: 'Delete Selected Item', shortcut: 'Delete / Backspace' },
+    ],
+  },
+  {
     title: 'Mouse & Tab Bar Tips',
     items: [
       { action: 'Close any tab quickly', shortcut: 'Middle-Click Tab' },

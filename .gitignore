@@ -19,7 +19,7 @@ build/
 !build/icon.png
 !build/icon.svg
 !build/icon-*.png
-release/
+/release/
 
 # Testing
 coverage/

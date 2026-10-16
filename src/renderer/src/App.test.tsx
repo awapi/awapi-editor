@@ -2690,7 +2690,10 @@ describe('Editor Core Tests', () => {
 
       // Zoom in updates both toolbar and status bar zoom indicator
       fireEvent.click(screen.getByTestId('image-zoom-in'));
-      expect(screen.getByTestId('status-image-zoom').textContent).toBe('Zoom: 125%');
+      expect(screen.getByTestId('image-zoom-level').textContent).toBe('125%');
+      await waitFor(() => {
+        expect(screen.getByTestId('status-image-zoom').textContent).toBe('Zoom: 125%');
+      });
 
       // External file change increments reloadToken (appends ?v=1 to asset URL)
       const img = screen.getByTestId('image-viewer-img') as HTMLImageElement;

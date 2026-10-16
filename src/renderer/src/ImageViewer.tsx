@@ -81,18 +81,28 @@ const ImageViewer: React.FC<ImageViewerProps> = ({
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const dragStartRef = useRef<{ x: number; y: number; scrollLeft: number; scrollTop: number } | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const prevTargetRef = useRef<{ filePath: string | null; title: string }>({ filePath, title });
+  const prevReloadRef = useRef<{ reloadToken: number; svgContent?: string }>({ reloadToken, svgContent });
 
-  // Reset zoom and dimensions when switching to a different file
+  // Reset zoom and dimensions only when switching to a different file (not on initial mount)
   useEffect(() => {
-    setZoomMode('fit');
-    setZoomPercent(100);
-    setDimensions(null);
-    setHasError(false);
+    const prev = prevTargetRef.current;
+    if (prev.filePath !== filePath || prev.title !== title) {
+      prevTargetRef.current = { filePath, title };
+      setZoomMode('fit');
+      setZoomPercent(100);
+      setDimensions(null);
+      setHasError(false);
+    }
   }, [filePath, title]);
 
   // Clear previous load error when disk file or SVG content updates
   useEffect(() => {
-    setHasError(false);
+    const prev = prevReloadRef.current;
+    if (prev.reloadToken !== reloadToken || prev.svgContent !== svgContent) {
+      prevReloadRef.current = { reloadToken, svgContent };
+      setHasError(false);
+    }
   }, [reloadToken, svgContent]);
 
   const imageSrc = useMemo(() => {

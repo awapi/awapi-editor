@@ -16,6 +16,7 @@ export interface OpenedFile {
   content: string;
   eol: 'LF' | 'CRLF';
   encoding?: EncodingKind;
+  byteSize?: number;
 }
 
 declare global {
@@ -96,6 +97,7 @@ declare global {
         terminalFont?: string | null;
         explorerFolderPath?: string | null;
         explorerVisible?: boolean;
+        favoriteFolders?: string[];
       }>;
       /** Merges the given fields into the stored settings. */
       saveSettings: (settings: {
@@ -106,6 +108,7 @@ declare global {
         terminalFont?: string | null;
         explorerFolderPath?: string | null;
         explorerVisible?: boolean;
+        favoriteFolders?: string[];
       }) => Promise<boolean>;
       applyNativeTheme: (theme: string) => Promise<void>;
       getDefaultSessionDir: () => Promise<string>;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ArrowUp, ChevronDown, ChevronRight, FolderOpen, RefreshCw, ChevronsDownUp, X } from 'lucide-react';
+import { ArrowUp, ChevronDown, ChevronRight, FolderOpen, RefreshCw, ChevronsDownUp, Star, X } from 'lucide-react';
 import { useTheme } from './theme/ThemeContext';
 import { FileIcon, FolderIcon } from './FileIcon';
 
@@ -31,6 +31,10 @@ interface FileExplorerProps {
   onCloseExplorer: () => void;
   /** Switches the File Explorer root to `dirPath` on the same instance. */
   onChangeRootFolder?: (dirPath: string) => void;
+  /** Bookmarked / favorite folder paths shown in the Favorites section. */
+  favoriteFolders?: string[];
+  /** Adds or removes `dirPath` from the user's favorite folders. */
+  onToggleFavoriteFolder?: (dirPath: string) => void;
   /** Notifies the parent app when a file or folder is renamed from the Explorer tree. */
   onItemRenamed?: (oldPath: string, newPath: string, newName: string, isDirectory: boolean) => void;
   /** Notifies the parent app when a file or folder is deleted from the Explorer tree. */
@@ -46,6 +50,8 @@ const MAX_WIDTH = 520;
 export const OPEN_EDITORS_MAX_HEIGHT = 180;
 export const MIN_OPEN_EDITORS_HEIGHT = 48;
 export const MAX_OPEN_EDITORS_HEIGHT = 500;
+/** Default maximum height of the Favorites list before it scrolls internally (~6 rows). */
+export const FAVORITES_MAX_HEIGHT = 160;
 
 /** Normalizes slashes and trailing separators for cross-platform path comparisons. */
 export function normalizePathForCompare(p: string): string {
@@ -109,6 +115,8 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
   onPickFolder,
   onCloseExplorer,
   onChangeRootFolder,
+  favoriteFolders = [],
+  onToggleFavoriteFolder,
   onItemRenamed,
   onItemDeleted,
   refreshToken = 0,
@@ -120,6 +128,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
   const [openEditorsHeight, setOpenEditorsHeight] = useState<number | null>(null);
   const [isDraggingSectionSplitter, setIsDraggingSectionSplitter] = useState<boolean>(false);
   const openEditorsListRef = useRef<HTMLDivElement | null>(null);
+  const [favoritesExpanded, setFavoritesExpanded] = useState<boolean>(true);
   const [rootSectionExpanded, setRootSectionExpanded] = useState<boolean>(true);
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [entriesByDir, setEntriesByDir] = useState<Record<string, ExplorerEntry[]>>({});
@@ -431,6 +440,24 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     setContextMenu(null);
     if (entry.isDirectory) {
       onChangeRootFolder?.(entry.path);
+    }
+  };
+
+  const isFolderFavorited = useCallback(
+    (dirPath: string | null | undefined): boolean => {
+      if (!dirPath) return false;
+      const norm = normalizePathForCompare(dirPath);
+      return favoriteFolders.some(f => normalizePathForCompare(f) === norm);
+    },
+    [favoriteFolders],
+  );
+
+  const handleToggleFavoriteFromContextMenu = () => {
+    if (!contextMenu) return;
+    const { targetDirPath } = contextMenu;
+    setContextMenu(null);
+    if (targetDirPath) {
+      onToggleFavoriteFolder?.(targetDirPath);
     }
   };
 
@@ -1092,6 +1119,153 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
           />
         )}
 
+        {/* Favorites Section */}
+        <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column' }}>
+          <div
+            data-testid="explorer-favorites-header"
+            onClick={() => setFavoritesExpanded(prev => !prev)}
+            style={{
+              ...sectionHeaderStyle,
+              borderTop: openEditorsExpanded ? 'none' : `1px solid ${colors.tabHover}`,
+            }}
+          >
+            {favoritesExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <span style={{ flexGrow: 1 }}>Favorites</span>
+            <span
+              data-testid="explorer-favorites-count"
+              style={{
+                fontSize: '10px',
+                padding: '0 5px',
+                borderRadius: '8px',
+                backgroundColor: colors.tabHover,
+                opacity: 0.85,
+              }}
+            >
+              {favoriteFolders.length}
+            </span>
+          </div>
+
+          {favoritesExpanded && (
+            <div
+              data-testid="explorer-favorites-list"
+              style={{
+                padding: '2px 0 4px',
+                maxHeight: `${FAVORITES_MAX_HEIGHT}px`,
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                borderBottom: `1px solid ${colors.tabHover}`,
+              }}
+            >
+              {favoriteFolders.length === 0 ? (
+                <div
+                  data-testid="explorer-favorites-empty"
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    color: subtleTextColor,
+                  }}
+                >
+                  No favorite folders yet.
+                </div>
+              ) : (
+                favoriteFolders.map(favPath => {
+                  const normFav = normalizePathForCompare(favPath);
+                  const isCurrentRoot =
+                    !!rootFolderPath && normalizePathForCompare(rootFolderPath) === normFav;
+                  const favName = getPathBasename(favPath);
+                  const parentHint = getParentDirPath(favPath);
+                  const showParentHint =
+                    parentHint && normalizePathForCompare(parentHint) !== normFav;
+                  return (
+                    <div
+                      key={favPath}
+                      data-testid={`explorer-favorite-item-${favName}`}
+                      data-path={favPath}
+                      title={favPath}
+                      onClick={() => onChangeRootFolder?.(favPath)}
+                      onMouseEnter={e => {
+                        if (!isCurrentRoot) {
+                          (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
+                        }
+                      }}
+                      onMouseLeave={e => {
+                        if (!isCurrentRoot) {
+                          (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+                        }
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '3px 8px 3px 10px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        backgroundColor: isCurrentRoot ? activeRowBg : 'transparent',
+                        color: colors.foreground,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        data-testid={`explorer-remove-favorite-${favName}`}
+                        aria-label={`Remove ${favName} from Favorites`}
+                        title="Remove from Favorites"
+                        onClick={e => {
+                          e.stopPropagation();
+                          onToggleFavoriteFolder?.(favPath);
+                        }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0,
+                          width: '16px',
+                          height: '16px',
+                          border: 'none',
+                          background: 'transparent',
+                          color: colors.foreground,
+                          opacity: 0.65,
+                          cursor: 'pointer',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <X size={13} />
+                      </button>
+                      <FolderIcon name={favName} isOpen={isCurrentRoot} size={15} />
+                      <span
+                        data-testid={`explorer-favorite-title-${favName}`}
+                        style={{
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          flexShrink: 0,
+                          maxWidth: showParentHint ? '55%' : '100%',
+                        }}
+                      >
+                        {favName}
+                      </span>
+                      {showParentHint && (
+                        <span
+                          data-testid={`explorer-favorite-subpath-${favName}`}
+                          style={{
+                            fontSize: '11px',
+                            color: subtleTextColor,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            flexGrow: 1,
+                          }}
+                        >
+                          {parentHint}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Folder Tree Section */}
         {rootFolderPath ? (
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -1111,7 +1285,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
               }}
               style={{
                 ...sectionHeaderStyle,
-                borderTop: openEditorsExpanded ? 'none' : `1px solid ${colors.tabHover}`,
+                borderTop: 'none',
                 textTransform: 'none',
                 fontSize: '12px',
                 flexShrink: 0,
@@ -1124,10 +1298,42 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
+                  flexGrow: 1,
                 }}
               >
                 {rootFolderName}
               </span>
+              {onToggleFavoriteFolder && (
+                <button
+                  type="button"
+                  data-testid="explorer-root-favorite-btn"
+                  aria-label={
+                    isFolderFavorited(rootFolderPath)
+                      ? 'Remove Folder from Favorites'
+                      : 'Add Folder to Favorites'
+                  }
+                  title={
+                    isFolderFavorited(rootFolderPath)
+                      ? 'Remove Folder from Favorites'
+                      : 'Add Folder to Favorites'
+                  }
+                  onClick={e => {
+                    e.stopPropagation();
+                    onToggleFavoriteFolder(rootFolderPath);
+                  }}
+                  style={{
+                    ...iconBtnStyle,
+                    opacity: isFolderFavorited(rootFolderPath) ? 1 : 0.65,
+                    color: isFolderFavorited(rootFolderPath) ? '#f59e0b' : colors.foreground,
+                    flexShrink: 0,
+                  }}
+                >
+                  <Star
+                    size={13}
+                    fill={isFolderFavorited(rootFolderPath) ? '#f59e0b' : 'none'}
+                  />
+                </button>
+              )}
             </div>
 
             {rootSectionExpanded && (
@@ -1312,6 +1518,39 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
                 >
                   New Folder…
                 </div>
+                {onToggleFavoriteFolder && (
+                  <>
+                    <div
+                      style={{
+                        height: '1px',
+                        margin: '4px 0',
+                        backgroundColor: colors.tabHover,
+                      }}
+                    />
+                    <div
+                      role="menuitem"
+                      data-testid="explorer-context-toggle-favorite"
+                      onClick={handleToggleFavoriteFromContextMenu}
+                      onMouseEnter={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
+                      }}
+                      onMouseLeave={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        padding: '7px 14px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: colors.foreground,
+                        backgroundColor: 'transparent',
+                      }}
+                    >
+                      {isFolderFavorited(contextMenu.targetDirPath)
+                        ? 'Remove from Favorites'
+                        : 'Add to Favorites'}
+                    </div>
+                  </>
+                )}
               </>
             )}
             {contextMenu.entry?.isDirectory && (

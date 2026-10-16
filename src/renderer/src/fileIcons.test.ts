@@ -40,6 +40,8 @@ describe('fileIcons classification', () => {
     expect(resolveFileIconKind('index.php')).toBe('php');
     expect(resolveFileIconKind('layout.xml')).toBe('xml');
     expect(resolveFileIconKind('logo.png')).toBe('image');
+    expect(resolveFileIconKind('banner.avif')).toBe('image');
+    expect(resolveFileIconKind('icon.svg')).toBe('image');
     expect(resolveFileIconKind('manual.pdf')).toBe('pdf');
     expect(resolveFileIconKind('bundle.zip')).toBe('archive');
     expect(resolveFileIconKind('Untitled')).toBe('default');

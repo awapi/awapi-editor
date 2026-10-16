@@ -199,6 +199,7 @@ export function resolveFileIconKind(filenameOrPath: string): FileIconKind {
     case 'webp':
     case 'ico':
     case 'bmp':
+    case 'avif':
       return 'image';
     case 'pdf':
       return 'pdf';

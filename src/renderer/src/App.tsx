@@ -23,7 +23,13 @@ import {
 import { inferLanguageFromFilename } from './languages';
 import { isCsvTab } from './csv';
 import { isMarkdownTab } from './markdown';
+import {
+  isRasterImagePath,
+  isSvgPath,
+  getImageFormatLabel,
+} from '../../shared/images';
 import CsvGridEditor from './CsvGridEditor';
+import ImageViewer, { type ImageViewerMetadata } from './ImageViewer';
 import TerminalPanel from './TerminalPanel';
 import { useTerminalSessions } from './useTerminalSessions';
 import { isNewTerminalShortcut, isToggleTerminalShortcut } from './terminalKeys';
@@ -58,6 +64,12 @@ interface Tab {
   themeOverride?: 'light' | 'dark';
   /** For CSV/TSV tabs: whether to render the spreadsheet grid ('grid', default) or raw text ('text'). */
   csvViewMode?: 'grid' | 'text';
+  /** For SVG tabs: whether to render the image viewer ('preview', default) or XML code editor ('code'). */
+  imageViewMode?: 'preview' | 'code';
+  /** Optional file size in bytes as reported when opened from disk. */
+  byteSize?: number;
+  /** Incremented when the file is updated on disk so image views reload fresh. */
+  reloadToken?: number;
   /** True when opened via a single-click in the File Explorer (italic title; replaced by the next single-clicked file until pinned). */
   isPreview?: boolean;
 }
@@ -79,6 +91,7 @@ const App: React.FC = () => {
   const [isExplorerOpen, setIsExplorerOpen] = useState(false);
   const [isMarkdownPreviewOpen, setIsMarkdownPreviewOpen] = useState(false);
   const [explorerFolderPath, setExplorerFolderPath] = useState<string | null>(null);
+  const [favoriteFolders, setFavoriteFolders] = useState<string[]>([]);
   const [explorerRefreshToken, setExplorerRefreshToken] = useState(0);
   const explorerSettingsReadyRef = React.useRef(false);
   const explorerOverriddenByArgsRef = React.useRef(false);
@@ -103,6 +116,7 @@ const App: React.FC = () => {
   );
   const [cursorPosition, setCursorPosition] = useState<{ line: number; column: number }>({ line: 1, column: 1 });
   const [selectionSummary, setSelectionSummary] = useState<{ lines: number; chars: number }>({ lines: 0, chars: 0 });
+  const [imageMetadata, setImageMetadata] = useState<ImageViewerMetadata | null>(null);
 
   const updateSelectionSummary = React.useCallback((editor: any) => {
     const selection = editor?.getSelection?.();
@@ -284,15 +298,28 @@ const App: React.FC = () => {
     (window as any).electronAPI?.setWindowDirty?.(popoutIsDirty);
   }, [popoutIsDirty]);
 
-  // Persist File Explorer visibility and folder path once initial settings have loaded
+  // Persist File Explorer visibility, folder path, and favorite folders once initial settings have loaded
   useEffect(() => {
     if (isPopoutMode || !explorerSettingsReadyRef.current) return;
     const w = window as any;
     w.electronAPI?.saveSettings?.({
       explorerVisible: isExplorerOpen,
       explorerFolderPath,
+      favoriteFolders,
     });
-  }, [isExplorerOpen, explorerFolderPath]);
+  }, [isExplorerOpen, explorerFolderPath, favoriteFolders]);
+
+  const handleToggleFavoriteFolder = React.useCallback((dirPath: string) => {
+    if (!dirPath) return;
+    const normTarget = normalizePathForCompare(dirPath);
+    setFavoriteFolders(prev => {
+      const exists = prev.some(f => normalizePathForCompare(f) === normTarget);
+      if (exists) {
+        return prev.filter(f => normalizePathForCompare(f) !== normTarget);
+      }
+      return [...prev, dirPath];
+    });
+  }, []);
 
   const handlePickExplorerFolder = React.useCallback(async () => {
     const w = window as any;
@@ -364,6 +391,7 @@ const App: React.FC = () => {
                     savedContent: result.content,
                     eol: result.eol ?? 'LF',
                     encoding: result.encoding ?? DEFAULT_ENCODING,
+                    byteSize: result.byteSize,
                     isPreview: true,
                   }
                 : t,
@@ -385,6 +413,7 @@ const App: React.FC = () => {
             savedContent: result.content,
             eol: result.eol ?? 'LF',
             encoding: result.encoding ?? DEFAULT_ENCODING,
+            byteSize: result.byteSize,
             isPreview: wantPreview,
           },
         ]);
@@ -414,6 +443,20 @@ const App: React.FC = () => {
           return t;
         }),
       );
+      if (isDirectory) {
+        setFavoriteFolders(prev =>
+          prev.map(fav => {
+            const normFav = normalizePathForCompare(fav);
+            if (normFav === normOld) return newPath;
+            if (normFav.startsWith(normOld + '/')) {
+              const sep = newPath.includes('\\') ? '\\' : '/';
+              const suffix = normFav.slice(normOld.length).replace(/\//g, sep);
+              return newPath + suffix;
+            }
+            return fav;
+          }),
+        );
+      }
     },
     [],
   );
@@ -434,6 +477,14 @@ const App: React.FC = () => {
           return t;
         }),
       );
+      if (isDirectory) {
+        setFavoriteFolders(prev =>
+          prev.filter(fav => {
+            const normFav = normalizePathForCompare(fav);
+            return normFav !== normDeleted && !normFav.startsWith(normDeleted + '/');
+          }),
+        );
+      }
     },
     [],
   );
@@ -482,6 +533,7 @@ const App: React.FC = () => {
                           eol: fileData.eol,
                           encoding: fileData.encoding ?? saved.encoding ?? DEFAULT_ENCODING,
                           savedContent: fileData.content,
+                          byteSize: fileData.byteSize,
                         };
                       }
                     } catch {
@@ -511,16 +563,23 @@ const App: React.FC = () => {
           addNewTab();
         }
 
-        // Restore persisted File Explorer folder and visibility from settings
+        // Restore persisted File Explorer folder, visibility, and favorite folders from settings
         if (w.electronAPI?.loadSettings) {
           try {
             const settings = await w.electronAPI.loadSettings();
-            if (settings && !explorerOverriddenByArgsRef.current) {
-              if (typeof settings.explorerFolderPath === 'string' && settings.explorerFolderPath) {
-                setExplorerFolderPath(settings.explorerFolderPath);
+            if (settings) {
+              if (Array.isArray(settings.favoriteFolders)) {
+                setFavoriteFolders(
+                  settings.favoriteFolders.filter((p: unknown): p is string => typeof p === 'string' && p.length > 0),
+                );
               }
-              if (typeof settings.explorerVisible === 'boolean') {
-                setIsExplorerOpen(settings.explorerVisible);
+              if (!explorerOverriddenByArgsRef.current) {
+                if (typeof settings.explorerFolderPath === 'string' && settings.explorerFolderPath) {
+                  setExplorerFolderPath(settings.explorerFolderPath);
+                }
+                if (typeof settings.explorerVisible === 'boolean') {
+                  setIsExplorerOpen(settings.explorerVisible);
+                }
               }
             }
           } catch {
@@ -541,7 +600,7 @@ const App: React.FC = () => {
 
       w.electronAPI.onOpenFile(async () => {
         try {
-          const openedFiles: Array<{ filePath: string; content: string; eol: EolKind; encoding?: EncodingKind }> | null =
+          const openedFiles: Array<{ filePath: string; content: string; eol: EolKind; encoding?: EncodingKind; byteSize?: number }> | null =
             await w.electronAPI.openFileDialog();
           if (!Array.isArray(openedFiles) || openedFiles.length === 0) return;
 
@@ -570,6 +629,7 @@ const App: React.FC = () => {
               savedContent: item.content,
               eol: item.eol ?? 'LF',
               encoding: item.encoding ?? DEFAULT_ENCODING,
+              byteSize: item.byteSize,
             });
             lastTargetId = id;
           });
@@ -587,7 +647,7 @@ const App: React.FC = () => {
         const active = activeTabIdRef.current;
         if (!active) return;
         const currentTab = tabsRef.current.find((t: Tab) => t.id === active);
-        if(!currentTab) return;
+        if (!currentTab || isRasterImagePath(currentTab.filePath ?? currentTab.title)) return;
 
         try {
           const savedPath = await invokeSaveFileDialog(w, currentTab, currentTab.filePath);
@@ -608,7 +668,7 @@ const App: React.FC = () => {
         const active = activeTabIdRef.current;
         if (!active) return;
         const currentTab = tabsRef.current.find((t: Tab) => t.id === active);
-        if(!currentTab) return;
+        if (!currentTab || isRasterImagePath(currentTab.filePath ?? currentTab.title)) return;
 
         try {
           const savedPath = await invokeSaveFileDialog(w, currentTab, null);
@@ -655,6 +715,16 @@ const App: React.FC = () => {
       }) => {
         const target = tabsRef.current.find((t: Tab) => t.filePath === data.filePath);
         if (!target) return;
+        if (isRasterImagePath(target.filePath ?? target.title)) {
+          setTabs(prev =>
+            prev.map(t =>
+              t.id === target.id
+                ? { ...t, reloadToken: (t.reloadToken ?? 0) + 1, isDirty: false }
+                : t,
+            ),
+          );
+          return;
+        }
         const nextEol = data.eol ?? target.eol ?? 'LF';
         const nextEncoding = data.encoding ?? target.encoding ?? DEFAULT_ENCODING;
         if (
@@ -670,6 +740,7 @@ const App: React.FC = () => {
           savedContent: latest.content,
           eol: latest.eol ?? target.eol ?? 'LF',
           encoding: latest.encoding ?? target.encoding ?? DEFAULT_ENCODING,
+          reloadToken: (target.reloadToken ?? 0) + 1,
           isDirty: false,
         });
         if (!target.isDirty) {
@@ -947,6 +1018,7 @@ const App: React.FC = () => {
               savedContent: result.content,
               eol: result.eol,
               encoding: result.encoding ?? DEFAULT_ENCODING,
+              byteSize: result.byteSize,
             }]);
             setActiveTabId(id);
           }
@@ -1021,6 +1093,7 @@ const App: React.FC = () => {
                 savedContent: result.content,
                 eol: result.eol,
                 encoding: result.encoding ?? DEFAULT_ENCODING,
+                byteSize: result.byteSize,
               });
               lastTargetId = id;
             }
@@ -1410,7 +1483,26 @@ const App: React.FC = () => {
   const isActiveTabMarkdown = activeTab
     ? isMarkdownTab(activeTab.filePath ?? activeTab.title, effectiveLanguage)
     : false;
+  const isActiveTabRasterImage = activeTab
+    ? isRasterImagePath(activeTab.filePath ?? activeTab.title)
+    : false;
+  const isActiveTabSvg = activeTab
+    ? isSvgPath(activeTab.filePath ?? activeTab.title)
+    : false;
   const activeCsvViewMode = activeTab?.csvViewMode ?? 'grid';
+  const activeImageViewMode = activeTab?.imageViewMode ?? 'preview';
+  const isActiveTabImagePreview =
+    isActiveTabRasterImage || (isActiveTabSvg && activeImageViewMode === 'preview');
+
+  const isSecondaryTabRasterImage = secondaryTab
+    ? isRasterImagePath(secondaryTab.filePath ?? secondaryTab.title)
+    : false;
+  const isSecondaryTabSvg = secondaryTab
+    ? isSvgPath(secondaryTab.filePath ?? secondaryTab.title)
+    : false;
+  const isSecondaryTabImagePreview =
+    isSecondaryTabRasterImage ||
+    (isSecondaryTabSvg && (secondaryTab?.imageViewMode ?? 'preview') === 'preview');
 
   const currentThemeRef = React.useRef(currentTheme);
   currentThemeRef.current = currentTheme;
@@ -1478,6 +1570,11 @@ const App: React.FC = () => {
   const setActiveTabCsvViewMode = (mode: 'grid' | 'text') => {
     if (!activeTabId) return;
     setTabs(prev => prev.map(t => (t.id === activeTabId ? { ...t, csvViewMode: mode } : t)));
+  };
+
+  const setActiveTabImageViewMode = (mode: 'preview' | 'code') => {
+    if (!activeTabId) return;
+    setTabs(prev => prev.map(t => (t.id === activeTabId ? { ...t, imageViewMode: mode } : t)));
   };
 
   const secondaryInferredLanguage = secondaryTab
@@ -1692,7 +1789,17 @@ const App: React.FC = () => {
   };
 
   const handleSelectFindMatch = (match: TabSearchMatch) => {
-    if (match.tabId !== activeTabId) {
+    const matchedTab = tabsRef.current.find(t => t.id === match.tabId);
+    const needsSvgCodeSwitch =
+      matchedTab &&
+      isSvgPath(matchedTab.filePath ?? matchedTab.title) &&
+      (matchedTab.imageViewMode ?? 'preview') === 'preview';
+    if (needsSvgCodeSwitch) {
+      setTabs(prev =>
+        prev.map(t => (t.id === match.tabId ? { ...t, imageViewMode: 'code' } : t)),
+      );
+    }
+    if (match.tabId !== activeTabId || needsSvgCodeSwitch) {
       pendingJumpRef.current = {
         lineNumber: match.lineNumber,
         column: match.column,
@@ -1828,6 +1935,8 @@ const App: React.FC = () => {
           onPickFolder={() => { void handlePickExplorerFolder(); }}
           onCloseExplorer={() => setIsExplorerOpen(false)}
           onChangeRootFolder={setExplorerFolderPath}
+          favoriteFolders={favoriteFolders}
+          onToggleFavoriteFolder={handleToggleFavoriteFolder}
           onItemRenamed={handleExplorerItemRenamed}
           onItemDeleted={handleExplorerItemDeleted}
           refreshToken={explorerRefreshToken}
@@ -2260,50 +2369,94 @@ const App: React.FC = () => {
                   borderRight: `1px solid ${colors.tabHover}`,
                 }}
               >
-                <Editor
-                  height="100%"
-                  theme={(activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark')) === 'light' ? 'light' : 'vs-dark'}
-                  path={activeTab.title}
-                  language={effectiveLanguage}
-                  value={activeTab.content}
-                  onChange={handleEditorChange}
-                  onMount={handlePrimaryEditorMount}
-                  options={{
-                    minimap: { enabled: false },
-                    fontSize: 14,
-                    wordWrap: wordWrap ? 'on' : 'off',
-                    renderWhitespace: showWhitespace ? 'all' : 'none',
-                    renderControlCharacters: showWhitespace,
-                    formatOnType: true,
-                    formatOnPaste: true,
-                    padding: { top: 6 },
-                    lineNumbersMinChars: 5,
-                  }}
-                />
+                {isActiveTabImagePreview ? (
+                  <ImageViewer
+                    filePath={activeTab.filePath}
+                    title={activeTab.title}
+                    svgContent={isActiveTabSvg ? activeTab.content : undefined}
+                    byteSize={activeTab.byteSize}
+                    reloadToken={activeTab.reloadToken}
+                    onSwitchToCodeView={isActiveTabSvg ? () => setActiveTabImageViewMode('code') : undefined}
+                    onMetadataChange={setImageMetadata}
+                    colors={{
+                      ...colors,
+                      background: surfaceBgFor(activeTab.themeOverride),
+                      foreground: surfaceFgFor(activeTab.themeOverride),
+                    }}
+                    themeMode={(activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark'))}
+                  />
+                ) : (
+                  <Editor
+                    height="100%"
+                    theme={(activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark')) === 'light' ? 'light' : 'vs-dark'}
+                    path={activeTab.title}
+                    language={effectiveLanguage}
+                    value={activeTab.content}
+                    onChange={handleEditorChange}
+                    onMount={handlePrimaryEditorMount}
+                    options={{
+                      minimap: { enabled: false },
+                      fontSize: 14,
+                      wordWrap: wordWrap ? 'on' : 'off',
+                      renderWhitespace: showWhitespace ? 'all' : 'none',
+                      renderControlCharacters: showWhitespace,
+                      formatOnType: true,
+                      formatOnPaste: true,
+                      padding: { top: 6 },
+                      lineNumbersMinChars: 5,
+                    }}
+                  />
+                )}
               </div>
               <div
                 data-testid="split-right-pane"
                 style={{ flex: 1, minWidth: 0, height: '100%' }}
               >
-                <Editor
-                  height="100%"
-                  theme={(secondaryTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark')) === 'light' ? 'light' : 'vs-dark'}
-                  path={`${secondaryTab.title}-split`}
-                  language={secondaryEffectiveLanguage}
-                  value={secondaryTab.content}
-                  onChange={handleSecondaryEditorChange}
-                  options={{
-                    minimap: { enabled: false },
-                    fontSize: 14,
-                    wordWrap: wordWrap ? 'on' : 'off',
-                    renderWhitespace: showWhitespace ? 'all' : 'none',
-                    renderControlCharacters: showWhitespace,
-                    formatOnType: true,
-                    formatOnPaste: true,
-                    padding: { top: 6 },
-                    lineNumbersMinChars: 5,
-                  }}
-                />
+                {isSecondaryTabImagePreview ? (
+                  <ImageViewer
+                    filePath={secondaryTab.filePath}
+                    title={secondaryTab.title}
+                    svgContent={isSecondaryTabSvg ? secondaryTab.content : undefined}
+                    byteSize={secondaryTab.byteSize}
+                    reloadToken={secondaryTab.reloadToken}
+                    onSwitchToCodeView={
+                      isSecondaryTabSvg
+                        ? () =>
+                            setTabs(prev =>
+                              prev.map(t =>
+                                t.id === secondaryTab.id ? { ...t, imageViewMode: 'code' } : t,
+                              ),
+                            )
+                        : undefined
+                    }
+                    colors={{
+                      ...colors,
+                      background: surfaceBgFor(secondaryTab.themeOverride),
+                      foreground: surfaceFgFor(secondaryTab.themeOverride),
+                    }}
+                    themeMode={(secondaryTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark'))}
+                  />
+                ) : (
+                  <Editor
+                    height="100%"
+                    theme={(secondaryTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark')) === 'light' ? 'light' : 'vs-dark'}
+                    path={`${secondaryTab.title}-split`}
+                    language={secondaryEffectiveLanguage}
+                    value={secondaryTab.content}
+                    onChange={handleSecondaryEditorChange}
+                    options={{
+                      minimap: { enabled: false },
+                      fontSize: 14,
+                      wordWrap: wordWrap ? 'on' : 'off',
+                      renderWhitespace: showWhitespace ? 'all' : 'none',
+                      renderControlCharacters: showWhitespace,
+                      formatOnType: true,
+                      formatOnPaste: true,
+                      padding: { top: 6 },
+                      lineNumbersMinChars: 5,
+                    }}
+                  />
+                )}
               </div>
             </div>
           ) : !isPopoutMode && viewMode === 'diff' && secondaryTab ? (
@@ -2334,6 +2487,22 @@ const App: React.FC = () => {
                 />
               ) : null}
             </div>
+          ) : isActiveTabImagePreview ? (
+            <ImageViewer
+              filePath={activeTab.filePath}
+              title={activeTab.title}
+              svgContent={isActiveTabSvg ? activeTab.content : undefined}
+              byteSize={activeTab.byteSize}
+              reloadToken={activeTab.reloadToken}
+              onSwitchToCodeView={isActiveTabSvg ? () => setActiveTabImageViewMode('code') : undefined}
+              onMetadataChange={setImageMetadata}
+              colors={{
+                ...colors,
+                background: surfaceBgFor(activeTab.themeOverride),
+                foreground: surfaceFgFor(activeTab.themeOverride),
+              }}
+              themeMode={(activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark'))}
+            />
           ) : isActiveTabCsv && activeCsvViewMode === 'grid' ? (
             <CsvGridEditor
               content={activeTab.content}
@@ -2384,6 +2553,39 @@ const App: React.FC = () => {
                   </button>
                 </div>
               )}
+              {isActiveTabSvg && (
+                <div
+                  data-testid="svg-code-view-banner"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '4px 10px',
+                    backgroundColor: colors.tabBackground,
+                    borderBottom: `1px solid ${colors.tabHover}`,
+                    fontSize: '12px',
+                    flexShrink: 0,
+                  }}
+                >
+                  <span style={{ opacity: 0.8 }}>Editing SVG XML source</span>
+                  <button
+                    data-testid="svg-switch-to-preview-button"
+                    onClick={() => setActiveTabImageViewMode('preview')}
+                    style={{
+                      padding: '2px 9px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      borderRadius: '4px',
+                      border: `1px solid ${colors.tabBorder}`,
+                      backgroundColor: colors.background,
+                      color: colors.foreground,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Image Preview
+                  </button>
+                </div>
+              )}
               <div style={{ flex: 1, minHeight: 0 }}>
                 <Editor
                   height="100%"
@@ -2423,7 +2625,7 @@ const App: React.FC = () => {
       {!isPopoutMode && (
         <FindInTabsPanel
           isOpen={isFindInTabsOpen}
-          tabs={tabs}
+          tabs={tabs.filter(t => !isRasterImagePath(t.filePath ?? t.title))}
           onClose={() => setIsFindInTabsOpen(false)}
           onSelectMatch={handleSelectFindMatch}
           onReplaceAllInTabs={handleReplaceAllInTabs}
@@ -2984,41 +3186,59 @@ const App: React.FC = () => {
             opacity: 0.9,
           }}
         >
-          {activeTab && (
-            <span
-              data-testid="status-cursor-position"
-              role="button"
-              tabIndex={0}
-              title="Go to Line (Ctrl+G)"
-              onClick={() => setIsGoToLineOpen(true)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  setIsGoToLineOpen(true);
-                }
-              }}
-              style={{ cursor: 'pointer' }}
-            >
-              Ln {cursorPosition.line}, Col {cursorPosition.column}
-            </span>
-          )}
-          {activeTab && (
-            <span data-testid="status-selection-summary">
-              Sel {selectionSummary.lines}L, {selectionSummary.chars}C
-            </span>
-          )}
-          {activeTab && (
-            <span data-testid="status-total-characters">
-              Chars {activeTab.content.length}
-            </span>
-          )}
-          {activeTab && showWhitespace && (
-            <span
-              data-testid="status-whitespace-indicator"
-              title="Showing whitespace & EOL"
-            >
-              WS+EOL ({activeTab.eol ?? 'LF'})
-            </span>
+          {activeTab && isActiveTabImagePreview ? (
+            <>
+              <span data-testid="status-image-format">
+                {getImageFormatLabel(activeTab.filePath ?? activeTab.title)} Image
+              </span>
+              {imageMetadata?.width && imageMetadata?.height && (
+                <span data-testid="status-image-dimensions">
+                  {imageMetadata.width} × {imageMetadata.height} px
+                </span>
+              )}
+              <span data-testid="status-image-zoom">
+                Zoom: {imageMetadata?.isFit ?? true ? 'Fit' : `${imageMetadata?.zoomPercent ?? 100}%`}
+              </span>
+            </>
+          ) : (
+            <>
+              {activeTab && (
+                <span
+                  data-testid="status-cursor-position"
+                  role="button"
+                  tabIndex={0}
+                  title="Go to Line (Ctrl+G)"
+                  onClick={() => setIsGoToLineOpen(true)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setIsGoToLineOpen(true);
+                    }
+                  }}
+                  style={{ cursor: 'pointer' }}
+                >
+                  Ln {cursorPosition.line}, Col {cursorPosition.column}
+                </span>
+              )}
+              {activeTab && (
+                <span data-testid="status-selection-summary">
+                  Sel {selectionSummary.lines}L, {selectionSummary.chars}C
+                </span>
+              )}
+              {activeTab && (
+                <span data-testid="status-total-characters">
+                  Chars {activeTab.content.length}
+                </span>
+              )}
+              {activeTab && showWhitespace && (
+                <span
+                  data-testid="status-whitespace-indicator"
+                  title="Showing whitespace & EOL"
+                >
+                  WS+EOL ({activeTab.eol ?? 'LF'})
+                </span>
+              )}
+            </>
           )}
           {alwaysOnTop && (
             <span
@@ -3031,6 +3251,7 @@ const App: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center' }}>
+        {!isActiveTabImagePreview && (
         <button
           data-testid="whitespace-toggle"
           aria-label={showWhitespace ? 'Hide Whitespace & EOL' : 'Show Whitespace & EOL'}
@@ -3057,6 +3278,8 @@ const App: React.FC = () => {
         >
           ¶
         </button>
+        )}
+        {!isActiveTabImagePreview && (
         <button
           data-testid="word-wrap-toggle"
           aria-label={wordWrap ? 'Disable Word Wrap' : 'Enable Word Wrap'}
@@ -3098,7 +3321,8 @@ const App: React.FC = () => {
             <line x1="2" y1="12.5" x2="5" y2="12.5" />
           </svg>
         </button>
-        {activeTab && (
+        )}
+        {activeTab && !isActiveTabImagePreview && (
           <EncodingSelector
             encoding={activeTab.encoding ?? DEFAULT_ENCODING}
             canReopen={!!activeTab.filePath}
@@ -3113,7 +3337,7 @@ const App: React.FC = () => {
             }}
           />
         )}
-        {activeTab && (
+        {activeTab && !isActiveTabImagePreview && (
           <LineEndingSelector
             eol={activeTab.eol ?? 'LF'}
             onChange={handleEolChange}
@@ -3126,7 +3350,7 @@ const App: React.FC = () => {
             }}
           />
         )}
-        {activeTab && (
+        {activeTab && !isActiveTabImagePreview && (
           <LanguageSelector
             languageId={effectiveLanguage}
             inferred={isLanguageInferred}

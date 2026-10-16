@@ -25,6 +25,8 @@ export interface AppSettings {
   explorerFolderPath?: string | null;
   /** Whether the File Explorer sidebar was visible. */
   explorerVisible?: boolean;
+  /** Bookmarked / favorite folder paths shown in the File Explorer sidebar. */
+  favoriteFolders?: string[];
 }
 
 /** Lazily compute settings file path (not at module load time) */

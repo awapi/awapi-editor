@@ -67,6 +67,7 @@ import {
   decodeRawFileInput,
   encodeTextToBuffer,
 } from './encoding';
+import { isRasterImagePath } from '../shared/images';
 import {
   markSelfSaved,
   syncWatchedFiles,
@@ -382,6 +383,40 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+/**
+ * Reads a file for opening in a tab. For binary raster images, skips reading
+ * and decoding the file payload into a text string (the renderer streams the
+ * image via `awapi-asset://`), while still verifying read access and size.
+ */
+function readTargetFileForTab(fp: string, explicitEncoding?: EncodingKind) {
+  if (isRasterImagePath(fp)) {
+    const stat = fs.statSync(fp);
+    if (stat.isDirectory()) {
+      throw new Error(`EISDIR: illegal operation on a directory, read '${fp}'`);
+    }
+    const fd = fs.openSync(fp, 'r');
+    fs.closeSync(fd);
+    return {
+      filePath: fp,
+      content: '',
+      eol: 'LF' as EolKind,
+      encoding: DEFAULT_ENCODING,
+      byteSize: stat.size,
+    };
+  }
+  const raw = fs.readFileSync(fp);
+  const decoded = decodeRawFileInput(raw, explicitEncoding);
+  const eol = detectEol(decoded.content);
+  // Normalize to LF so Monaco has consistent line endings in memory.
+  return {
+    filePath: fp,
+    content: normalizeToLF(decoded.content),
+    eol,
+    encoding: decoded.encoding,
+    byteSize: raw.byteLength,
+  };
+}
+
 // IPC Handlers
 ipcMain.handle('dialog:openFile', async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
@@ -391,18 +426,7 @@ ipcMain.handle('dialog:openFile', async (event) => {
   });
   if (canceled || filePaths.length === 0) return null;
 
-  const { files, failures } = readFilesForOpen(filePaths, (fp) => {
-    const raw = fs.readFileSync(fp);
-    const decoded = decodeRawFileInput(raw);
-    const eol = detectEol(decoded.content);
-    // Normalize to LF so Monaco has consistent line endings in memory.
-    return {
-      filePath: fp,
-      content: normalizeToLF(decoded.content),
-      eol,
-      encoding: decoded.encoding,
-    };
-  });
+  const { files, failures } = readFilesForOpen(filePaths, (fp) => readTargetFileForTab(fp));
 
   if (failures.length > 0) {
     // Not awaited: the readable files open while the error is shown.
@@ -423,18 +447,11 @@ ipcMain.handle('dialog:openFile', async (event) => {
 ipcMain.handle('file:read', async (_, filePath: string, rawOptions?: unknown) => {
   try {
     const options = parseReadFileOptions(rawOptions);
-    const raw = fs.readFileSync(filePath);
-    const decoded = decodeRawFileInput(raw, options.encoding);
-    const eol = detectEol(decoded.content);
+    const result = readTargetFileForTab(filePath, options.encoding);
     if (options.trackRecent) {
       recordRecentFile(filePath);
     }
-    return {
-      filePath,
-      content: normalizeToLF(decoded.content),
-      eol,
-      encoding: decoded.encoding,
-    };
+    return result;
   } catch (error) {
     console.error('Failed to read file:', error);
     return null;

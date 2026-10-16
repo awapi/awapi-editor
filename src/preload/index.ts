@@ -6,7 +6,7 @@ export const electronAPI = {
   /** Resolves with every file that could be read, or null if canceled / none could be read. */
   openFileDialog: () =>
     ipcRenderer.invoke('dialog:openFile') as Promise<
-      Array<{ filePath: string; content: string; eol: 'LF' | 'CRLF'; encoding?: EncodingKind }> | null
+      Array<{ filePath: string; content: string; eol: 'LF' | 'CRLF'; encoding?: EncodingKind; byteSize?: number }> | null
     >,
   saveFileDialog: (
     filePath: string | null,

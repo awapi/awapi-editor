@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import { type EncodingKind, decodeRawFileInput } from './encoding';
+import { isRasterImagePath } from '../shared/images';
 
 export type EolKind = 'LF' | 'CRLF';
 
@@ -80,6 +81,15 @@ export function handleDiskEvent(filePath: string, callbacks: FileWatcherCallback
   try {
     if (!fs.existsSync(filePath)) {
       callbacks.onFileDeleted(filePath);
+      return;
+    }
+    if (isRasterImagePath(filePath)) {
+      callbacks.onFileChanged({
+        filePath,
+        content: '',
+        eol: 'LF',
+        encoding: 'utf-8',
+      });
       return;
     }
     const raw = fs.readFileSync(filePath);

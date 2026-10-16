@@ -2651,4 +2651,104 @@ describe('Editor Core Tests', () => {
       expect(screen.queryByTestId('markdown-preview-button')).toBeNull();
     });
   });
+
+  describe('Image Viewer and SVG Preview / Code View', () => {
+    it('renders raster images in ImageViewer with zoom controls and status bar metadata', async () => {
+      const api = (window as any).electronAPI;
+      let externalChangeCb: ((data: any) => void) | null = null;
+      api.onExternalFileChange = vi.fn((cb: (data: any) => void) => {
+        externalChangeCb = cb;
+      });
+      api.readFile = vi.fn(async (filePath: string) => ({
+        filePath,
+        content: '',
+        eol: 'LF',
+        encoding: 'utf-8',
+        byteSize: 4096,
+      }));
+      api.loadSession.mockResolvedValue({
+        activeTabId: 'tab-png',
+        tabs: [
+          {
+            id: 'tab-png',
+            title: 'screenshot.png',
+            filePath: '/workspace/screenshot.png',
+            content: '',
+            isDirty: false,
+            eol: 'LF',
+          },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => expect(screen.getByTestId('image-viewer')).toBeTruthy());
+
+      expect(screen.getByTestId('image-format-badge').textContent).toBe('PNG');
+      expect(screen.getByTestId('status-image-format').textContent).toBe('PNG Image');
+      expect(screen.getByTestId('status-image-zoom').textContent).toBe('Zoom: Fit');
+      expect(screen.queryByTestId('monaco-editor-mock')).toBeNull();
+
+      // Zoom in updates both toolbar and status bar zoom indicator
+      fireEvent.click(screen.getByTestId('image-zoom-in'));
+      expect(screen.getByTestId('status-image-zoom').textContent).toBe('Zoom: 125%');
+
+      // External file change increments reloadToken (appends ?v=1 to asset URL)
+      const img = screen.getByTestId('image-viewer-img') as HTMLImageElement;
+      expect(img.getAttribute('src')).toBe('awapi-asset://local/workspace/screenshot.png');
+      act(() => {
+        externalChangeCb?.({
+          filePath: '/workspace/screenshot.png',
+          content: '',
+          eol: 'LF',
+          encoding: 'utf-8',
+        });
+      });
+      expect(img.getAttribute('src')).toBe('awapi-asset://local/workspace/screenshot.png?v=1');
+    });
+
+    it('opens SVG files in Image Preview by default and toggles to XML Code View and back', async () => {
+      const api = (window as any).electronAPI;
+      const svgMarkup = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="24"/></svg>';
+      api.readFile = vi.fn(async (filePath: string) => ({
+        filePath,
+        content: svgMarkup,
+        eol: 'LF',
+        encoding: 'utf-8',
+        byteSize: svgMarkup.length,
+      }));
+      api.loadSession.mockResolvedValue({
+        activeTabId: 'tab-svg',
+        tabs: [
+          {
+            id: 'tab-svg',
+            title: 'logo.svg',
+            filePath: '/workspace/logo.svg',
+            content: svgMarkup,
+            isDirty: false,
+            eol: 'LF',
+          },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => expect(screen.getByTestId('image-viewer')).toBeTruthy());
+      expect(screen.getByTestId('image-format-badge').textContent).toBe('SVG');
+
+      // Switch to XML Code View
+      fireEvent.click(screen.getByTestId('svg-switch-to-code-button'));
+      expect(screen.getByTestId('svg-code-view-banner')).toBeTruthy();
+      expect(screen.queryByTestId('image-viewer')).toBeNull();
+      expect(typeof capturedEditorOnChange).toBe('function');
+
+      // Edit SVG XML in Code View and switch back to Image Preview
+      const updatedSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128"/></svg>';
+      act(() => {
+        capturedEditorOnChange?.(updatedSvg);
+      });
+      fireEvent.click(screen.getByTestId('svg-switch-to-preview-button'));
+      expect(screen.getByTestId('image-viewer')).toBeTruthy();
+      const img = screen.getByTestId('image-viewer-img') as HTMLImageElement;
+      expect(decodeURIComponent(img.getAttribute('src')!.replace('data:image/svg+xml;utf8,', ''))).toBe(updatedSvg);
+    });
+  });
 });

@@ -110,10 +110,15 @@ describe('session settings and recent files', () => {
     expect(loaded.recentFiles).toEqual(['/tmp/keep-me.txt']);
   });
 
-  it('persists and restores explorerFolderPath and explorerVisible in settings', () => {
-    saveAppSettings({ explorerFolderPath: '/workspace/project', explorerVisible: true });
+  it('persists and restores explorerFolderPath, explorerVisible, and favoriteFolders in settings', () => {
+    saveAppSettings({
+      explorerFolderPath: '/workspace/project',
+      explorerVisible: true,
+      favoriteFolders: ['/workspace/project', '/workspace/docs'],
+    });
     const loaded = loadAppSettings();
     expect(loaded.explorerFolderPath).toBe('/workspace/project');
     expect(loaded.explorerVisible).toBe(true);
+    expect(loaded.favoriteFolders).toEqual(['/workspace/project', '/workspace/docs']);
   });
 });

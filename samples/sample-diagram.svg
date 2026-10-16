@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 260" width="680" height="260">
+  <defs>
+    <linearGradient id="cardMain" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e3a8a" />
+      <stop offset="100%" stop-color="#2563eb" />
+    </linearGradient>
+    <linearGradient id="cardPreload" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#065f46" />
+      <stop offset="100%" stop-color="#10b981" />
+    </linearGradient>
+    <linearGradient id="cardRenderer" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#581c87" />
+      <stop offset="100%" stop-color="#9333ea" />
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#94a3b8" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="340" y="34" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="16" font-weight="700" fill="#64748b">
+    Awapi Editor — IPC Architecture
+  </text>
+
+  <!-- Main Process Box -->
+  <rect x="30" y="65" width="170" height="140" rx="12" fill="url(#cardMain)" stroke="#60a5fa" stroke-width="1.5" />
+  <text x="115" y="102" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#ffffff">
+    Main Process
+  </text>
+  <text x="115" y="128" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#dbeafe">
+    File System (fs)
+  </text>
+  <text x="115" y="148" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#dbeafe">
+    Native Dialogs &amp; Menus
+  </text>
+  <text x="115" y="168" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#dbeafe">
+    PTY &amp; File Watchers
+  </text>
+
+  <!-- Preload Bridge Box -->
+  <rect x="255" y="65" width="170" height="140" rx="12" fill="url(#cardPreload)" stroke="#34d399" stroke-width="1.5" />
+  <text x="340" y="102" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#ffffff">
+    Preload Bridge
+  </text>
+  <text x="340" y="128" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#d1fae5">
+    contextBridge
+  </text>
+  <text x="340" y="148" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#d1fae5">
+    window.electronAPI
+  </text>
+  <text x="340" y="168" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#d1fae5">
+    Typed IPC Channels
+  </text>
+
+  <!-- Renderer UI Box -->
+  <rect x="480" y="65" width="170" height="140" rx="12" fill="url(#cardRenderer)" stroke="#c084fc" stroke-width="1.5" />
+  <text x="565" y="102" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" font-weight="700" fill="#ffffff">
+    Renderer UI
+  </text>
+  <text x="565" y="128" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#f3e8ff">
+    React 19 + Monaco
+  </text>
+  <text x="565" y="148" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#f3e8ff">
+    CSV Grid &amp; Image View
+  </text>
+  <text x="565" y="168" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#f3e8ff">
+    Markdown Preview
+  </text>
+
+  <!-- Arrows -->
+  <line x1="204" y1="135" x2="251" y2="135" stroke="#94a3b8" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)" />
+  <line x1="429" y1="135" x2="476" y2="135" stroke="#94a3b8" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)" />
+</svg>

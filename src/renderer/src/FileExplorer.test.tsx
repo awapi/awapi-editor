@@ -538,4 +538,95 @@ describe('FileExplorer component', () => {
       preview: false,
     });
   });
+
+  it('displays Favorites section, toggles favorite folders via star button and context menu, and switches root folder when clicking a favorite', async () => {
+    const onChangeRootFolder = vi.fn();
+    const onToggleFavoriteFolder = vi.fn();
+
+    const { rerender } = render(
+      <ThemeProvider>
+        <FileExplorer
+          isOpen={true}
+          rootFolderPath="/workspace/awapi-editor"
+          tabs={[]}
+          activeTabId={null}
+          onSelectTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onOpenFileFromTree={vi.fn()}
+          onPickFolder={vi.fn()}
+          onCloseExplorer={vi.fn()}
+          onChangeRootFolder={onChangeRootFolder}
+          favoriteFolders={[]}
+          onToggleFavoriteFolder={onToggleFavoriteFolder}
+        />
+      </ThemeProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('explorer-folder-samples')).toBeTruthy();
+    });
+
+    // Empty state shown when no favorites exist
+    expect(screen.getByTestId('explorer-favorites-header')).toBeTruthy();
+    expect(screen.getByTestId('explorer-favorites-count').textContent).toBe('0');
+    expect(screen.getByTestId('explorer-favorites-empty')).toBeTruthy();
+
+    // Clicking star button on root folder header adds current root folder to favorites
+    const rootFavBtn = screen.getByTestId('explorer-root-favorite-btn');
+    expect(rootFavBtn.getAttribute('aria-label')).toBe('Add Folder to Favorites');
+    fireEvent.click(rootFavBtn);
+    expect(onToggleFavoriteFolder).toHaveBeenCalledWith('/workspace/awapi-editor');
+
+    // Right-clicking a folder in the tree shows "Add to Favorites"
+    fireEvent.contextMenu(screen.getByTestId('explorer-folder-samples'));
+    const contextFavItem = screen.getByTestId('explorer-context-toggle-favorite');
+    expect(contextFavItem.textContent).toBe('Add to Favorites');
+    fireEvent.click(contextFavItem);
+    expect(onToggleFavoriteFolder).toHaveBeenCalledWith('/workspace/awapi-editor/samples');
+
+    // Re-render with both folders in favoriteFolders
+    rerender(
+      <ThemeProvider>
+        <FileExplorer
+          isOpen={true}
+          rootFolderPath="/workspace/awapi-editor"
+          tabs={[]}
+          activeTabId={null}
+          onSelectTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onOpenFileFromTree={vi.fn()}
+          onPickFolder={vi.fn()}
+          onCloseExplorer={vi.fn()}
+          onChangeRootFolder={onChangeRootFolder}
+          favoriteFolders={['/workspace/awapi-editor', '/workspace/awapi-editor/samples']}
+          onToggleFavoriteFolder={onToggleFavoriteFolder}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByTestId('explorer-favorites-count').textContent).toBe('2');
+    expect(screen.queryByTestId('explorer-favorites-empty')).toBeNull();
+    expect(screen.getByTestId('explorer-favorite-item-awapi-editor')).toBeTruthy();
+    expect(screen.getByTestId('explorer-favorite-item-samples')).toBeTruthy();
+    expect(screen.getByTestId('explorer-root-favorite-btn').getAttribute('aria-label')).toBe(
+      'Remove Folder from Favorites',
+    );
+
+    // Clicking a favorite folder switches the Explorer root folder
+    fireEvent.click(screen.getByTestId('explorer-favorite-item-samples'));
+    expect(onChangeRootFolder).toHaveBeenCalledWith('/workspace/awapi-editor/samples');
+
+    // Clicking the X button on a favorite removes it without switching root folder
+    onChangeRootFolder.mockClear();
+    onToggleFavoriteFolder.mockClear();
+    fireEvent.click(screen.getByTestId('explorer-remove-favorite-samples'));
+    expect(onToggleFavoriteFolder).toHaveBeenCalledWith('/workspace/awapi-editor/samples');
+    expect(onChangeRootFolder).not.toHaveBeenCalled();
+
+    // Right-clicking an already favorited folder shows "Remove from Favorites"
+    fireEvent.contextMenu(screen.getByTestId('explorer-folder-samples'));
+    expect(screen.getByTestId('explorer-context-toggle-favorite').textContent).toBe(
+      'Remove from Favorites',
+    );
+  });
 });

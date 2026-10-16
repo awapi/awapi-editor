@@ -248,5 +248,21 @@ describe('fileWatcher', () => {
 
       expect(callbacks.onFileChanged).not.toHaveBeenCalled();
     });
+
+    it('emits onFileChanged with empty content for raster image files without decoding binary bytes', () => {
+      files.set('/tmp/photo.png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      const onFileChanged = vi.fn();
+      const onFileDeleted = vi.fn();
+
+      handleDiskEvent('/tmp/photo.png', { onFileChanged, onFileDeleted });
+
+      expect(onFileDeleted).not.toHaveBeenCalled();
+      expect(onFileChanged).toHaveBeenCalledWith({
+        filePath: '/tmp/photo.png',
+        content: '',
+        eol: 'LF',
+        encoding: 'utf-8',
+      });
+    });
   });
 });

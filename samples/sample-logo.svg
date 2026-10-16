@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0ea5e9" />
+      <stop offset="50%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#a855f7" />
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#f472b6" />
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded Hexagon Badge -->
+  <rect x="24" y="24" width="192" height="192" rx="42" fill="url(#bgGrad)" />
+  <rect x="34" y="34" width="172" height="172" rx="34" fill="#0f172a" fill-opacity="0.88" />
+
+  <!-- Code Brackets + Cursor -->
+  <path d="M 88 86 L 56 120 L 88 154" fill="none" stroke="url(#accentGrad)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="M 152 86 L 184 120 L 152 154" fill="none" stroke="url(#accentGrad)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" />
+  <line x1="130" y1="78" x2="110" y2="162" stroke="#f8fafc" stroke-width="9" stroke-linecap="round" />
+</svg>

@@ -30,7 +30,7 @@
       ],
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "identity": null
+      "identity": "-"
     },
     "win": {
       "icon": "build/icon.ico",
@@ -77,7 +77,7 @@
     "url": "git+https://github.com/awapi/awapi-editor.git"
   },
   "keywords": [],
-  "author": "",
+  "author": "awapi <oyesil@gmail.com>",
   "license": "Apache-2.0",
   "type": "commonjs",
   "bugs": {

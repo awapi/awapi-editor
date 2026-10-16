@@ -20,10 +20,19 @@ AwapiEditor is a fast, lightweight, universal text editor built specifically for
 
 ### macOS
 
+**Option 1 — One-line install / update (no Gatekeeper prompt):**
+
+Run this in Terminal to automatically download the latest release, install **AwapiEditor** to `/Applications`, and clear macOS quarantine attributes:
+```bash
+curl -fsSL https://raw.githubusercontent.com/awapi/awapi-editor/main/scripts/install-macos.sh | bash
+```
+
+**Option 2 — Manual `.dmg` download:**
+
 1. Download the latest `.dmg` from the [Releases](https://github.com/awapi/awapi-editor/releases) page.
 2. Open the `.dmg` and drag **AwapiEditor** into your `/Applications` folder.
-3. Because the app is currently **not code-signed**, macOS Gatekeeper will warn on first launch. Right-click (or Control-click) **AwapiEditor.app** → **Open** → **Open** to bypass the warning.
-   If that doesn't work, run this once in Terminal:
+3. Because the app is ad-hoc signed without an Apple Developer certificate, macOS Gatekeeper will warn on first launch. Right-click (or Control-click) **AwapiEditor.app** → **Open** → **Open** (or go to **System Settings → Privacy & Security → Open Anyway**).
+   Alternatively, run this once in Terminal:
    ```bash
    xattr -cr "/Applications/AwapiEditor.app"
    ```
@@ -31,8 +40,9 @@ AwapiEditor is a fast, lightweight, universal text editor built specifically for
 
 ### Windows
 
-1. Download the latest `.exe` installer from the [Releases](https://github.com/awapi/awapi-editor/releases) page.
-2. Run the installer and follow the on-screen steps.
+1. Download the latest `.msi` or `.exe` installer from the [Releases](https://github.com/awapi/awapi-editor/releases) page.
+2. Because the app is currently **not code-signed**, Windows Defender SmartScreen will show a *"Windows protected your PC"* warning on first run. Click **More info** → **Run anyway** to proceed.
+3. Follow the on-screen installer steps.
 
 ### Linux
 

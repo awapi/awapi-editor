@@ -8,6 +8,7 @@ import FileExplorer, {
   getPathBasename,
   getParentDirPath,
   formatOpenEditorSubpath,
+  sortFavoriteFolders,
   type ExplorerEntry,
 } from './FileExplorer';
 
@@ -37,6 +38,24 @@ describe('FileExplorer utility functions', () => {
     ).toBe('/other/folder');
 
     expect(formatOpenEditorSubpath(null, 'C:\\Projects\\awapi')).toBe('');
+  });
+
+  it('sorts favorite folders by folder name case-insensitively with natural numeric ordering', () => {
+    expect(
+      sortFavoriteFolders([
+        '/workspace/zebra',
+        '/workspace/alpha',
+        '/workspace/nested/Beta',
+        '/workspace/item10',
+        '/workspace/item2',
+      ]),
+    ).toEqual([
+      '/workspace/alpha',
+      '/workspace/nested/Beta',
+      '/workspace/item2',
+      '/workspace/item10',
+      '/workspace/zebra',
+    ]);
   });
 });
 
@@ -584,7 +603,7 @@ describe('FileExplorer component', () => {
     fireEvent.click(contextFavItem);
     expect(onToggleFavoriteFolder).toHaveBeenCalledWith('/workspace/awapi-editor/samples');
 
-    // Re-render with both folders in favoriteFolders
+    // Re-render with multiple folders in unsorted order to verify Favorites are rendered sorted by name
     rerender(
       <ThemeProvider>
         <FileExplorer
@@ -598,16 +617,28 @@ describe('FileExplorer component', () => {
           onPickFolder={vi.fn()}
           onCloseExplorer={vi.fn()}
           onChangeRootFolder={onChangeRootFolder}
-          favoriteFolders={['/workspace/awapi-editor', '/workspace/awapi-editor/samples']}
+          favoriteFolders={[
+            '/workspace/awapi-editor/samples',
+            '/workspace/awapi-editor',
+            '/workspace/awapi-editor/docs',
+          ]}
           onToggleFavoriteFolder={onToggleFavoriteFolder}
         />
       </ThemeProvider>,
     );
 
-    expect(screen.getByTestId('explorer-favorites-count').textContent).toBe('2');
+    expect(screen.getByTestId('explorer-favorites-count').textContent).toBe('3');
     expect(screen.queryByTestId('explorer-favorites-empty')).toBeNull();
     expect(screen.getByTestId('explorer-favorite-item-awapi-editor')).toBeTruthy();
+    expect(screen.getByTestId('explorer-favorite-item-docs')).toBeTruthy();
     expect(screen.getByTestId('explorer-favorite-item-samples')).toBeTruthy();
+
+    const favList = screen.getByTestId('explorer-favorites-list');
+    const renderedFavTitles = Array.from(
+      favList.querySelectorAll('[data-testid^="explorer-favorite-title-"]'),
+    ).map(el => el.textContent);
+    expect(renderedFavTitles).toEqual(['awapi-editor', 'docs', 'samples']);
+
     expect(screen.getByTestId('explorer-root-favorite-btn').getAttribute('aria-label')).toBe(
       'Remove Folder from Favorites',
     );

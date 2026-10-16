@@ -102,6 +102,22 @@ export function formatOpenEditorSubpath(
   return parentDir;
 }
 
+/**
+ * Sorts favorite folder paths alphabetically by folder basename
+ * (case-insensitive with natural numeric ordering, falling back to full path).
+ */
+export function sortFavoriteFolders(folderPaths: string[]): string[] {
+  return [...folderPaths].sort((a, b) => {
+    const nameA = getPathBasename(a);
+    const nameB = getPathBasename(b);
+    const cmp = nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+    if (cmp !== 0) return cmp;
+    const exactNameCmp = nameA.localeCompare(nameB);
+    if (exactNameCmp !== 0) return exactNameCmp;
+    return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+  });
+}
+
 const FileExplorer: React.FC<FileExplorerProps> = ({
   isOpen,
   rootFolderPath,
@@ -449,6 +465,11 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
       const norm = normalizePathForCompare(dirPath);
       return favoriteFolders.some(f => normalizePathForCompare(f) === norm);
     },
+    [favoriteFolders],
+  );
+
+  const sortedFavoriteFolders = React.useMemo(
+    () => sortFavoriteFolders(favoriteFolders),
     [favoriteFolders],
   );
 
@@ -1156,7 +1177,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
                 borderBottom: `1px solid ${colors.tabHover}`,
               }}
             >
-              {favoriteFolders.length === 0 ? (
+              {sortedFavoriteFolders.length === 0 ? (
                 <div
                   data-testid="explorer-favorites-empty"
                   style={{
@@ -1168,7 +1189,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
                   No favorite folders yet.
                 </div>
               ) : (
-                favoriteFolders.map(favPath => {
+                sortedFavoriteFolders.map(favPath => {
                   const normFav = normalizePathForCompare(favPath);
                   const isCurrentRoot =
                     !!rootFolderPath && normalizePathForCompare(rootFolderPath) === normFav;

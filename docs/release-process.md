@@ -8,11 +8,11 @@
 
 ## Packaging targets
 
-| OS      | Target        | Notes                                  |
-| ------- | ------------- | -------------------------------------- |
-| macOS   | `.dmg`        | x64 and arm64 via CI                   |
-| Windows | `.exe` (NSIS) | x64 and arm64 via CI                   |
-| Linux   | `.AppImage`, `.deb` | x64 and arm64 via CI             |
+| OS      | Target              | Notes                |
+| ------- | ------------------- | -------------------- |
+| macOS   | `.dmg`              | x64 and arm64 via CI |
+| Windows | `.exe` (NSIS), `.msi` | x64 and arm64 via CI |
+| Linux   | `.AppImage`, `.deb` | x64 and arm64 via CI |
 
 Local packaging (current OS only):
 ```bash
@@ -27,15 +27,16 @@ Artifacts land in `release/`.
 
 **Status: not yet provisioned — TODO when certificates are obtained.**
 
-The app is currently shipped **unsigned**. The `package.json` mac config
-intentionally sets `hardenedRuntime: false`, `gatekeeperAssess: false`, and
-`identity: null` so that macOS Gatekeeper shows a dismissible warning rather
-than a hard block.
+The app is currently shipped without paid Apple/Microsoft certificates. The
+`package.json` mac config sets `hardenedRuntime: false`,
+`gatekeeperAssess: false`, and `identity: "-"` (ad-hoc signature) so that
+Apple Silicon Macs have a valid bundle signature seal and macOS Gatekeeper
+shows a dismissible warning rather than a "damaged app" block.
 
 ### User-facing workaround (until signing is in place)
 
-- **macOS:** Right-click → **Open** → **Open** on first launch.
-  If that fails: `xattr -cr "/Applications/AwapiEditor.app"`.
+- **macOS (automatic):** `curl -fsSL https://raw.githubusercontent.com/awapi/awapi-editor/main/scripts/install-macos.sh | bash`
+- **macOS (manual `.dmg`):** Right-click → **Open** → **Open** (or **System Settings → Privacy & Security → Open Anyway**) on first launch, or run `xattr -cr "/Applications/AwapiEditor.app"`.
 - **Windows:** SmartScreen "Windows protected your PC" → **More info → Run anyway**.
 - **Linux:** No warning for `.AppImage` (after `chmod +x`) or `.deb`.
 
@@ -44,7 +45,7 @@ than a hard block.
 1. Obtain an **Apple Developer ID** certificate and enroll in notarization.
 2. In `package.json`, update the `mac` section:
    - Set `"hardenedRuntime": true`
-   - Remove `"gatekeeperAssess": false` and `"identity": null`
+   - Remove `"gatekeeperAssess": false` and `"identity": "-"`
 3. Set the following environment variables in CI (GitHub Actions secrets):
    - `CSC_LINK` — base64-encoded `.p12` certificate
    - `CSC_KEY_PASSWORD` — certificate password

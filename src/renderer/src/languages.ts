@@ -40,6 +40,7 @@ export const SUPPORTED_LANGUAGES: LanguageOption[] = [
   { id: 'c', label: 'C' },
   { id: 'go', label: 'Go' },
   { id: 'rust', label: 'Rust' },
+  { id: 'just', label: 'Just' },
   { id: 'ruby', label: 'Ruby' },
   { id: 'php', label: 'PHP' },
   { id: 'kotlin', label: 'Kotlin' },
@@ -174,6 +175,7 @@ export function inferLanguageFromFilename(filename: string | null | undefined): 
   const lower = base.toLowerCase();
   // Dockerfile has no extension
   if (lower === 'dockerfile') return 'dockerfile';
+  if (lower === 'justfile' || lower === '.justfile') return 'just';
   const dot = lower.lastIndexOf('.');
   if (dot < 0 || dot === lower.length - 1) return DEFAULT_LANGUAGE_ID;
   const ext = lower.slice(dot + 1);

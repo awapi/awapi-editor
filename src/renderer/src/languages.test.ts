@@ -35,6 +35,12 @@ describe('inferLanguageFromFilename', () => {
     expect(inferLanguageFromFilename('/repo/Dockerfile')).toBe('dockerfile');
   });
 
+  it('recognizes justfiles by name (no extension)', () => {
+    expect(inferLanguageFromFilename('justfile')).toBe('just');
+    expect(inferLanguageFromFilename('Justfile')).toBe('just');
+    expect(inferLanguageFromFilename('/repo/.justfile')).toBe('just');
+  });
+
   it('works with full paths on both separators', () => {
     expect(inferLanguageFromFilename('/a/b/c/file.go')).toBe('go');
     expect(inferLanguageFromFilename('C:\\a\\b\\file.cs')).toBe('csharp');
@@ -114,7 +120,7 @@ describe('SUPPORTED_LANGUAGES', () => {
     const ids = new Set(SUPPORTED_LANGUAGES.map(l => l.id));
     for (const id of [
       'bat', 'bicep', 'clojure', 'coffee', 'dart', 'elixir', 'fsharp',
-      'handlebars', 'hcl', 'julia', 'objective-c', 'pascal', 'perl',
+      'handlebars', 'hcl', 'just', 'julia', 'objective-c', 'pascal', 'perl',
       'protobuf', 'pug', 'razor', 'restructuredtext', 'scala', 'scheme',
       'solidity', 'tcl', 'twig', 'vb',
     ]) {

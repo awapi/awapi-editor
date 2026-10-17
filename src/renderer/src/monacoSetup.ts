@@ -34,6 +34,46 @@ export function createMonacoWorker(label: string): Worker {
  * any <Editor> mounts.
  */
 export function setupMonaco(): void {
+  monaco.languages.register({
+    id: 'just',
+    aliases: ['Just', 'justfile'],
+  });
+  monaco.languages.setMonarchTokensProvider('just', {
+    tokenizer: {
+      root: [
+        [/^[ \t]*#[^\n]*/, 'comment'],
+        [/^([ \t]*)([@-]*)([a-zA-Z_][\w-]*)(?=.*:)/, ['white', 'annotation', 'type.identifier']],
+        [/\{\{|\}\}/, 'delimiter.bracket'],
+        [/\b(?:set|export|alias|import|mod)\b/, 'keyword'],
+        [/\b(?:true|false)\b/, 'constant'],
+        [/\b[A-Za-z_][\w-]*(?=\s*:?=)/, 'variable'],
+        [/[a-zA-Z_][\w-]*(?=\s*\()/, 'predefined'],
+        [/[a-zA-Z_][\w-]*/, 'identifier'],
+        [/[0-9]+/, 'number'],
+        [/[{}()[\]]/, 'delimiter'],
+        [/[:,=]/, 'delimiter'],
+        [/[ \t\r\n]+/, 'white'],
+        [/"/, { token: 'string.quote', next: '@doubleString' }],
+        [/'/, { token: 'string.quote', next: '@singleString' }],
+        [/`/, { token: 'string.backtick', next: '@command' }],
+      ],
+      doubleString: [
+        [/[^"\\]+/, 'string'],
+        [/\\./, 'string.escape'],
+        [/"/, { token: 'string.quote', next: '@pop' }],
+      ],
+      singleString: [
+        [/[^'\\]+/, 'string'],
+        [/\\./, 'string.escape'],
+        [/'/, { token: 'string.quote', next: '@pop' }],
+      ],
+      command: [
+        [/[^`\\]+/, 'string'],
+        [/\\./, 'string.escape'],
+        [/`/, { token: 'string.backtick', next: '@pop' }],
+      ],
+    },
+  });
   self.MonacoEnvironment = {
     getWorker: (_workerId: string, label: string) => createMonacoWorker(label),
   };

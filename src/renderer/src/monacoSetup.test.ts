@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { loaderConfig, monacoStub } = vi.hoisted(() => ({
   loaderConfig: vi.fn(),
-  monacoStub: { editor: {}, languages: {} },
+  monacoStub: {
+    editor: {},
+    languages: {
+      register: vi.fn(),
+      setMonarchTokensProvider: vi.fn(),
+    },
+  },
 }));
 
 vi.mock('monaco-editor', () => monacoStub);
@@ -47,6 +53,8 @@ describe('createMonacoWorker', () => {
 describe('setupMonaco', () => {
   beforeEach(() => {
     loaderConfig.mockClear();
+    monacoStub.languages.register.mockClear();
+    monacoStub.languages.setMonarchTokensProvider.mockClear();
     delete (self as { MonacoEnvironment?: unknown }).MonacoEnvironment;
   });
 
@@ -62,5 +70,24 @@ describe('setupMonaco', () => {
     expect(env?.getWorker).toBeTypeOf('function');
     expect(workerName(env!.getWorker!('id', 'json') as Worker)).toBe('json');
     expect(workerName(env!.getWorker!('id', 'markdown') as Worker)).toBe('editor');
+  });
+
+  it('registers the Just language and its tokenizer', () => {
+    setupMonaco();
+    expect(monacoStub.languages.register).toHaveBeenCalledWith({
+      id: 'just',
+      aliases: ['Just', 'justfile'],
+    });
+    expect(monacoStub.languages.setMonarchTokensProvider).toHaveBeenCalledWith(
+      'just',
+      expect.objectContaining({
+        tokenizer: expect.objectContaining({
+          root: expect.arrayContaining([
+            expect.arrayContaining([expect.any(RegExp), 'comment']),
+            expect.arrayContaining([expect.any(RegExp), 'keyword']),
+          ]),
+        }),
+      })
+    );
   });
 });

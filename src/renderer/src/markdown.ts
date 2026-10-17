@@ -33,6 +33,49 @@ export function isMarkdownTab(filename: string | null | undefined, languageId?: 
   return lower.endsWith('.md') || lower.endsWith('.markdown');
 }
 
+/**
+ * Returns true when a tab should expose HTML preview (either by `.html` / `.htm`
+ * filename extension or by explicit `html` language selection).
+ */
+export function isHtmlTab(filename: string | null | undefined, languageId?: string): boolean {
+  if (languageId === 'html') return true;
+  if (!filename) return false;
+  const base = filename.split(/[\\/]/).pop() ?? filename;
+  const lower = base.toLowerCase();
+  return lower.endsWith('.html') || lower.endsWith('.htm');
+}
+
+/**
+ * Returns true when a tab supports the live Preview popup window (Markdown or HTML).
+ */
+export function isPreviewableTab(filename: string | null | undefined, languageId?: string): boolean {
+  return isMarkdownTab(filename, languageId) || isHtmlTab(filename, languageId);
+}
+
+/**
+ * Prepares raw HTML source for rendering inside a sandboxed preview `<iframe srcDoc>`.
+ * When `baseFilePath` is provided and the HTML does not already declare a `<base>` tag,
+ * injects `<base href="awapi-asset://local/.../">` so relative images, stylesheets, and
+ * scripts resolve against the HTML file's directory on disk.
+ */
+export function prepareHtmlForPreview(rawHtml: string, options?: RenderMarkdownOptions): string {
+  const baseFilePath = options?.baseFilePath;
+  if (!baseFilePath || !baseFilePath.trim()) {
+    return rawHtml;
+  }
+  if (/<base\b/i.test(rawHtml)) {
+    return rawHtml;
+  }
+  const baseDirUrl = `${resolveRelativeFileUrl('.', baseFilePath).replace(/\/+$/, '')}/`;
+  const baseTag = `<base href="${escapeHtml(baseDirUrl)}">`;
+  const headMatch = /<head(?:\s[^>]*)?>/i.exec(rawHtml);
+  if (headMatch && headMatch.index !== undefined) {
+    const insertPos = headMatch.index + headMatch[0].length;
+    return `${rawHtml.slice(0, insertPos)}${baseTag}${rawHtml.slice(insertPos)}`;
+  }
+  return `${baseTag}${rawHtml}`;
+}
+
 /** Escape raw text for safe inclusion in HTML text or attribute values. */
 export function escapeHtml(raw: string): string {
   return raw

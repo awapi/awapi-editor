@@ -178,18 +178,20 @@ export const electronAPI = {
   onMoveToMain: (callback: () => void) => ipcRenderer.on('menu:moveToMain', () => callback()),
   onAddTab: (callback: (tabData: unknown) => void) => ipcRenderer.on('menu:addTab', (_, tabData) => callback(tabData)),
 
-  // Markdown preview popup window
+  // Markdown / HTML preview popup window
   openMarkdownPreview: (data: {
     title: string;
     filePath: string | null;
     content: string;
     theme?: 'light' | 'dark';
+    mode?: 'markdown' | 'html' | 'unsupported';
   }) => ipcRenderer.invoke('markdown:openPreview', data),
   updateMarkdownPreview: (data: {
     title: string;
     filePath: string | null;
     content: string;
     theme?: 'light' | 'dark';
+    mode?: 'markdown' | 'html' | 'unsupported';
   }) => ipcRenderer.invoke('markdown:updatePreview', data),
   getMarkdownPreviewData: () => ipcRenderer.invoke('markdown:getPreviewData'),
   onMarkdownPreviewUpdate: (
@@ -198,6 +200,7 @@ export const electronAPI = {
       filePath: string | null;
       content: string;
       theme?: 'light' | 'dark';
+      mode?: 'markdown' | 'html' | 'unsupported';
     }) => void,
   ) => {
     const listener = (
@@ -207,6 +210,7 @@ export const electronAPI = {
         filePath: string | null;
         content: string;
         theme?: 'light' | 'dark';
+        mode?: 'markdown' | 'html' | 'unsupported';
       },
     ) => callback(data);
     ipcRenderer.on('markdown:previewUpdate', listener);

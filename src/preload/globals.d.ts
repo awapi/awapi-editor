@@ -238,18 +238,21 @@ declare global {
         filePath: string | null;
         content: string;
         theme?: 'light' | 'dark';
+        mode?: 'markdown' | 'html' | 'unsupported';
       }) => Promise<boolean | void>;
       updateMarkdownPreview: (data: {
         title: string;
         filePath: string | null;
         content: string;
         theme?: 'light' | 'dark';
+        mode?: 'markdown' | 'html' | 'unsupported';
       }) => Promise<void>;
       getMarkdownPreviewData: () => Promise<{
         title: string;
         filePath: string | null;
         content: string;
         theme?: 'light' | 'dark';
+        mode?: 'markdown' | 'html' | 'unsupported';
       } | null>;
       onMarkdownPreviewUpdate: (
         callback: (data: {
@@ -257,6 +260,7 @@ declare global {
           filePath: string | null;
           content: string;
           theme?: 'light' | 'dark';
+          mode?: 'markdown' | 'html' | 'unsupported';
         }) => void
       ) => () => void;
       onMarkdownPreview: (callback: () => void) => void;

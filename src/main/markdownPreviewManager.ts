@@ -80,6 +80,7 @@ export interface MarkdownPreviewData {
   filePath: string | null;
   content: string;
   theme?: 'light' | 'dark';
+  mode?: 'markdown' | 'html' | 'unsupported';
 }
 
 export function normalizeMarkdownPreviewData(raw: unknown): MarkdownPreviewData {
@@ -88,7 +89,17 @@ export function normalizeMarkdownPreviewData(raw: unknown): MarkdownPreviewData 
   const filePath = typeof obj.filePath === 'string' && obj.filePath.trim() ? obj.filePath : null;
   const content = typeof obj.content === 'string' ? obj.content : '';
   const theme = obj.theme === 'light' || obj.theme === 'dark' ? obj.theme : undefined;
-  return { title, filePath, content, ...(theme ? { theme } : {}) };
+  const mode =
+    obj.mode === 'html' || obj.mode === 'markdown' || obj.mode === 'unsupported'
+      ? obj.mode
+      : undefined;
+  return {
+    title,
+    filePath,
+    content,
+    ...(theme ? { theme } : {}),
+    ...(mode ? { mode } : {}),
+  };
 }
 
 export interface MarkdownPreviewManager {

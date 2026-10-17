@@ -2646,9 +2646,77 @@ describe('Editor Core Tests', () => {
       });
       expect(api.openMarkdownPreview).toHaveBeenCalledTimes(4);
 
-      // Switching to a non-Markdown tab hides the toolbar Preview button
+      // Switching to a non-Markdown tab hides the toolbar Preview button and updates preview to unsupported
       fireEvent.click(screen.getByText(/index\.js/));
       expect(screen.queryByTestId('markdown-preview-button')).toBeNull();
+      await waitFor(() => {
+        expect(api.updateMarkdownPreview).toHaveBeenCalledWith({
+          title: 'index.js',
+          filePath: '/workspace/index.js',
+          content: '',
+          theme: 'dark',
+          mode: 'unsupported',
+        });
+      });
+    });
+
+    it('shows the Preview button and context menu option for .html and .htm tabs and syncs live updates', async () => {
+      const api = (window as any).electronAPI;
+      api.openMarkdownPreview = vi.fn().mockResolvedValue(true);
+      api.updateMarkdownPreview = vi.fn().mockResolvedValue(undefined);
+      api.readFile = vi.fn(async (filePath: string) => ({
+        filePath,
+        content: '<h1>Hello HTM</h1>',
+        eol: 'LF',
+        encoding: 'utf-8',
+      }));
+      api.loadSession.mockResolvedValue({
+        activeTabId: 'tab-htm',
+        tabs: [
+          {
+            id: 'tab-htm',
+            title: 'page.htm',
+            filePath: '/workspace/page.htm',
+            content: '<h1>Hello HTM</h1>',
+            isDirty: false,
+            eol: 'LF',
+          },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/page\.htm/));
+
+      const previewBtn = screen.getByTestId('markdown-preview-button');
+      expect(previewBtn.getAttribute('aria-label')).toBe('Open HTML Preview');
+
+      fireEvent.click(previewBtn);
+      expect(api.openMarkdownPreview).toHaveBeenCalledWith({
+        title: 'page.htm',
+        filePath: '/workspace/page.htm',
+        content: '<h1>Hello HTM</h1>',
+        theme: 'dark',
+        mode: 'html',
+      });
+
+      // Editing the HTML content sends a live update with mode: 'html'
+      act(() => {
+        capturedEditorOnChange?.('<h1>Updated HTM</h1>');
+      });
+      await waitFor(() => {
+        expect(api.updateMarkdownPreview).toHaveBeenCalledWith({
+          title: 'page.htm',
+          filePath: '/workspace/page.htm',
+          content: '<h1>Updated HTM</h1>',
+          theme: 'dark',
+          mode: 'html',
+        });
+      });
+
+      // Right-clicking page.htm shows "Open HTML Preview" in the tab context menu
+      fireEvent.contextMenu(screen.getByText(/page\.htm/));
+      const contextItem = screen.getByTestId('tab-context-markdown-preview');
+      expect(contextItem.textContent).toContain('Open HTML Preview');
     });
   });
 

@@ -8,7 +8,7 @@ import {
 } from './markdownPreviewManager';
 
 describe('normalizeMarkdownPreviewData', () => {
-  it('normalizes valid fields and preserves theme', () => {
+  it('normalizes valid fields and preserves theme and mode', () => {
     expect(
       normalizeMarkdownPreviewData({
         title: 'README.md',
@@ -21,6 +21,38 @@ describe('normalizeMarkdownPreviewData', () => {
       filePath: '/repo/README.md',
       content: '# Hello',
       theme: 'light',
+    });
+
+    expect(
+      normalizeMarkdownPreviewData({
+        title: 'index.htm',
+        filePath: '/repo/index.htm',
+        content: '<h1>Hello</h1>',
+        theme: 'dark',
+        mode: 'html',
+      }),
+    ).toEqual({
+      title: 'index.htm',
+      filePath: '/repo/index.htm',
+      content: '<h1>Hello</h1>',
+      theme: 'dark',
+      mode: 'html',
+    });
+
+    expect(
+      normalizeMarkdownPreviewData({
+        title: 'sample.py',
+        filePath: '/repo/sample.py',
+        content: '',
+        theme: 'dark',
+        mode: 'unsupported',
+      }),
+    ).toEqual({
+      title: 'sample.py',
+      filePath: '/repo/sample.py',
+      content: '',
+      theme: 'dark',
+      mode: 'unsupported',
     });
   });
 

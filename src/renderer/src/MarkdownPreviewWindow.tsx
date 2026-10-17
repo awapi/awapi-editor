@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTheme } from './theme/ThemeContext';
-import { renderMarkdownToHtml } from './markdown';
+import { isHtmlTab, prepareHtmlForPreview, renderMarkdownToHtml } from './markdown';
 
 export interface MarkdownPreviewPayload {
   title: string;
   filePath: string | null;
   content: string;
   theme?: 'light' | 'dark';
+  mode?: 'markdown' | 'html' | 'unsupported';
 }
 
 const MarkdownPreviewWindow: React.FC = () => {
@@ -76,9 +77,21 @@ const MarkdownPreviewWindow: React.FC = () => {
   const mutedFg = isLight ? '#59636e' : '#9da5b4';
   const linkColor = isLight ? '#0969da' : '#4daafc';
 
+  const isUnsupported = payload.mode === 'unsupported';
+
+  const isHtml = useMemo(
+    () => !isUnsupported && (payload.mode === 'html' || isHtmlTab(payload.filePath ?? payload.title)),
+    [isUnsupported, payload.mode, payload.filePath, payload.title],
+  );
+
   const renderedHtml = useMemo(
-    () => renderMarkdownToHtml(payload.content, { baseFilePath: payload.filePath }),
-    [payload.content, payload.filePath],
+    () =>
+      isUnsupported
+        ? ''
+        : isHtml
+          ? prepareHtmlForPreview(payload.content, { baseFilePath: payload.filePath })
+          : renderMarkdownToHtml(payload.content, { baseFilePath: payload.filePath }),
+    [isUnsupported, isHtml, payload.content, payload.filePath],
   );
 
   const handleToggleAlwaysOnTop = async () => {
@@ -275,6 +288,7 @@ const MarkdownPreviewWindow: React.FC = () => {
             {payload.title}
           </span>
           <span
+            data-testid="markdown-preview-badge"
             style={{
               marginLeft: '8px',
               padding: '1px 6px',
@@ -288,7 +302,7 @@ const MarkdownPreviewWindow: React.FC = () => {
               flexShrink: 0,
             }}
           >
-            Live Preview
+            {isUnsupported ? 'N/A' : 'Live Preview'}
           </span>
           {payload.filePath && (
             <span
@@ -348,22 +362,104 @@ const MarkdownPreviewWindow: React.FC = () => {
         </button>
       </div>
 
-      {/* Scrollable rendered Markdown body */}
+      {/* Scrollable rendered Markdown or sandboxed HTML body */}
       <div
         style={{
           flex: 1,
           minHeight: 0,
-          overflowY: 'auto',
-          padding: '24px 36px',
+          display:
+            isUnsupported || (isHtml && payload.content.trim().length > 0) ? 'flex' : 'block',
+          flexDirection: 'column',
+          overflowY: isHtml && payload.content.trim().length > 0 ? 'hidden' : 'auto',
+          padding: isHtml && payload.content.trim().length > 0 ? 0 : '24px 36px',
         }}
       >
-        {payload.content.trim().length === 0 ? (
+        {isUnsupported ? (
+          <div
+            data-testid="markdown-preview-unsupported"
+            style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              textAlign: 'center',
+              padding: '32px 24px',
+              color: mutedFg,
+            }}
+          >
+            <div
+              style={{
+                maxWidth: '420px',
+                padding: '28px 32px',
+                borderRadius: '10px',
+                border: `1px solid ${borderColor}`,
+                backgroundColor: codeBg,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '10px',
+              }}
+            >
+              <svg
+                width="32"
+                height="32"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                style={{ opacity: 0.75 }}
+              >
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+                <line x1="1" y1="1" x2="23" y2="23" />
+              </svg>
+              <div
+                style={{
+                  fontSize: '15px',
+                  fontWeight: 600,
+                  color: pageFg,
+                }}
+              >
+                N/A — Preview Not Supported
+              </div>
+              <div style={{ fontSize: '13px', lineHeight: 1.55 }}>
+                <strong style={{ color: pageFg }}>{payload.title}</strong> does not support Live Preview.
+              </div>
+              <div style={{ fontSize: '12px', opacity: 0.85, lineHeight: 1.5 }}>
+                Live Preview is available for <strong>Markdown</strong> (<code>.md</code>,{' '}
+                <code>.markdown</code>) and <strong>HTML</strong> (<code>.html</code>,{' '}
+                <code>.htm</code>) files.
+              </div>
+            </div>
+          </div>
+        ) : payload.content.trim().length === 0 ? (
           <div
             data-testid="markdown-preview-empty"
             style={{ color: mutedFg, fontStyle: 'italic', fontSize: '14px' }}
           >
-            Nothing to preview yet. Start typing Markdown in the editor…
+            {isHtml
+              ? 'Nothing to preview yet. Start typing HTML in the editor…'
+              : 'Nothing to preview yet. Start typing Markdown in the editor…'}
           </div>
+        ) : isHtml ? (
+          <iframe
+            data-testid="html-preview-iframe"
+            title={payload.title ? `HTML Preview — ${payload.title}` : 'HTML Preview'}
+            sandbox="allow-scripts"
+            srcDoc={renderedHtml}
+            style={{
+              flex: 1,
+              width: '100%',
+              height: '100%',
+              border: 'none',
+              backgroundColor: '#ffffff',
+            }}
+          />
         ) : (
           <div
             data-testid="markdown-preview-content"

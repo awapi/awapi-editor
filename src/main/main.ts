@@ -1349,6 +1349,7 @@ function sendUpdateToMarkdownPreviewWindow(data: MarkdownPreviewData): void {
   if (winId === null) return;
   const win = BrowserWindow.fromId(winId);
   if (!win || win.isDestroyed()) return;
+  win.setTitle(`Preview — ${data.title}`);
   const wc = win.webContents;
   if (!wc.isDestroyed() && !wc.isLoading()) {
     wc.send('markdown:previewUpdate', data);

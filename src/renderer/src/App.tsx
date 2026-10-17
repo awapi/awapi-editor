@@ -22,7 +22,7 @@ import {
 } from '../../shared/encodings';
 import { inferLanguageFromFilename } from './languages';
 import { isCsvTab } from './csv';
-import { isMarkdownTab } from './markdown';
+import { isHtmlTab, isMarkdownTab, isPreviewableTab } from './markdown';
 import {
   isRasterImagePath,
   isSvgPath,
@@ -1483,6 +1483,10 @@ const App: React.FC = () => {
   const isActiveTabMarkdown = activeTab
     ? isMarkdownTab(activeTab.filePath ?? activeTab.title, effectiveLanguage)
     : false;
+  const isActiveTabHtml = activeTab
+    ? isHtmlTab(activeTab.filePath ?? activeTab.title, effectiveLanguage)
+    : false;
+  const isActiveTabPreviewable = isActiveTabMarkdown || isActiveTabHtml;
   const isActiveTabRasterImage = activeTab
     ? isRasterImagePath(activeTab.filePath ?? activeTab.title)
     : false;
@@ -1510,11 +1514,16 @@ const App: React.FC = () => {
   const buildMarkdownPreviewPayload = React.useCallback((tab: Tab) => {
     const resolvedTheme: 'light' | 'dark' =
       tab.themeOverride ?? (currentThemeRef.current === 'light' ? 'light' : 'dark');
+    const tabLang = tab.language ?? inferLanguageFromFilename(tab.filePath ?? tab.title);
+    const isMarkdown = isMarkdownTab(tab.filePath ?? tab.title, tabLang);
+    const isHtml = isHtmlTab(tab.filePath ?? tab.title, tabLang);
+    const mode = isHtml ? ('html' as const) : !isMarkdown ? ('unsupported' as const) : undefined;
     return {
       title: tab.title,
       filePath: tab.filePath,
-      content: tab.content,
+      content: isMarkdown || isHtml ? tab.content : '',
       theme: resolvedTheme,
+      ...(mode ? { mode } : {}),
     };
   }, []);
 
@@ -1540,20 +1549,39 @@ const App: React.FC = () => {
     [buildMarkdownPreviewPayload],
   );
 
-  // Live-refresh the Markdown preview popup whenever the active Markdown tab's
-  // content, title, filePath, or theme changes.
+  // Live-refresh the Markdown / HTML preview popup whenever the active tab's
+  // content, title, filePath, theme, or preview support changes.
   useEffect(() => {
-    if (!activeTab || !isActiveTabMarkdown) return;
     const w = window as any;
     if (!w.electronAPI?.updateMarkdownPreview) return;
+    if (!activeTab) {
+      const fallbackTheme: 'light' | 'dark' = currentTheme === 'light' ? 'light' : 'dark';
+      const timer = setTimeout(() => {
+        void w.electronAPI?.updateMarkdownPreview?.({
+          title: 'No Active File',
+          filePath: null,
+          content: '',
+          theme: fallbackTheme,
+          mode: 'unsupported',
+        });
+      }, 60);
+      return () => clearTimeout(timer);
+    }
     const resolvedTheme: 'light' | 'dark' =
       activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark');
+    const mode = isActiveTabHtml
+      ? ('html' as const)
+      : !isActiveTabPreviewable
+        ? ('unsupported' as const)
+        : undefined;
+    const nextContent = isActiveTabPreviewable ? activeTab.content : '';
     const timer = setTimeout(() => {
       void w.electronAPI?.updateMarkdownPreview?.({
         title: activeTab.title,
         filePath: activeTab.filePath,
-        content: activeTab.content,
+        content: nextContent,
         theme: resolvedTheme,
+        ...(mode ? { mode } : {}),
       });
     }, 60);
     return () => clearTimeout(timer);
@@ -1561,9 +1589,10 @@ const App: React.FC = () => {
     activeTab?.id,
     activeTab?.title,
     activeTab?.filePath,
-    activeTab?.content,
+    isActiveTabPreviewable ? activeTab?.content : '',
     activeTab?.themeOverride,
-    isActiveTabMarkdown,
+    isActiveTabPreviewable,
+    isActiveTabHtml,
     currentTheme,
   ]);
 
@@ -2113,16 +2142,28 @@ const App: React.FC = () => {
               <line x1="8" y1="2.5" x2="8" y2="13.5" />
             </svg>
           </button>
-          {activeTab && isActiveTabMarkdown && (
+          {activeTab && isActiveTabPreviewable && (
             <button
               data-testid="markdown-preview-button"
-              aria-label={isMarkdownPreviewOpen ? 'Close Markdown Preview' : 'Open Markdown Preview'}
+              aria-label={
+                isMarkdownPreviewOpen
+                  ? isActiveTabHtml
+                    ? 'Close HTML Preview'
+                    : 'Close Markdown Preview'
+                  : isActiveTabHtml
+                    ? 'Open HTML Preview'
+                    : 'Open Markdown Preview'
+              }
               aria-pressed={isMarkdownPreviewOpen}
               onClick={() => openMarkdownPreviewForTab(activeTab.id)}
               title={
                 isMarkdownPreviewOpen
-                  ? 'Close Markdown Preview Popup (Cmd/Ctrl+Shift+V)'
-                  : 'Open Markdown Preview in Popup Window (Cmd/Ctrl+Shift+V)'
+                  ? isActiveTabHtml
+                    ? 'Close HTML Preview Popup (Cmd/Ctrl+Shift+V)'
+                    : 'Close Markdown Preview Popup (Cmd/Ctrl+Shift+V)'
+                  : isActiveTabHtml
+                    ? 'Open HTML Preview in Popup Window (Cmd/Ctrl+Shift+V)'
+                    : 'Open Markdown Preview in Popup Window (Cmd/Ctrl+Shift+V)'
               }
               style={{
                 height: '24px',
@@ -2191,16 +2232,28 @@ const App: React.FC = () => {
               </span>
             )}
           </div>
-          {isActiveTabMarkdown && (
+          {isActiveTabPreviewable && (
             <button
               data-testid="markdown-preview-button"
-              aria-label={isMarkdownPreviewOpen ? 'Close Markdown Preview' : 'Open Markdown Preview'}
+              aria-label={
+                isMarkdownPreviewOpen
+                  ? isActiveTabHtml
+                    ? 'Close HTML Preview'
+                    : 'Close Markdown Preview'
+                  : isActiveTabHtml
+                    ? 'Open HTML Preview'
+                    : 'Open Markdown Preview'
+              }
               aria-pressed={isMarkdownPreviewOpen}
               onClick={() => openMarkdownPreviewForTab(activeTab.id)}
               title={
                 isMarkdownPreviewOpen
-                  ? 'Close Markdown Preview Popup (Cmd/Ctrl+Shift+V)'
-                  : 'Open Markdown Preview in Popup Window (Cmd/Ctrl+Shift+V)'
+                  ? isActiveTabHtml
+                    ? 'Close HTML Preview Popup (Cmd/Ctrl+Shift+V)'
+                    : 'Close Markdown Preview Popup (Cmd/Ctrl+Shift+V)'
+                  : isActiveTabHtml
+                    ? 'Open HTML Preview in Popup Window (Cmd/Ctrl+Shift+V)'
+                    : 'Open Markdown Preview in Popup Window (Cmd/Ctrl+Shift+V)'
               }
               style={{
                 height: '22px',
@@ -2701,9 +2754,10 @@ const App: React.FC = () => {
               const targetLang =
                 target?.language ??
                 inferLanguageFromFilename(target?.filePath ?? target?.title);
-              if (!target || !isMarkdownTab(target.filePath ?? target.title, targetLang)) {
+              if (!target || !isPreviewableTab(target.filePath ?? target.title, targetLang)) {
                 return null;
               }
+              const targetIsHtml = isHtmlTab(target.filePath ?? target.title, targetLang);
               return (
                 <div
                   role="menuitem"
@@ -2723,7 +2777,7 @@ const App: React.FC = () => {
                     gap: '24px',
                   }}
                 >
-                  <span>Open Markdown Preview</span>
+                  <span>{targetIsHtml ? 'Open HTML Preview' : 'Open Markdown Preview'}</span>
                   <span style={{ opacity: 0.45, fontSize: '11px', flexShrink: 0 }}>Ctrl+Shift+V</span>
                 </div>
               );

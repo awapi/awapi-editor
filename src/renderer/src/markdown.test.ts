@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   isMarkdownTab,
+  isHtmlTab,
+  isPreviewableTab,
+  prepareHtmlForPreview,
   escapeHtml,
   sanitizeUrl,
   resolveRelativeFileUrl,
@@ -28,6 +31,66 @@ describe('isMarkdownTab', () => {
     expect(isMarkdownTab('data.csv')).toBe(false);
     expect(isMarkdownTab(null)).toBe(false);
     expect(isMarkdownTab('')).toBe(false);
+  });
+});
+
+describe('isHtmlTab & isPreviewableTab', () => {
+  it('returns true for .html and .htm filenames (case-insensitive)', () => {
+    expect(isHtmlTab('index.html')).toBe(true);
+    expect(isHtmlTab('page.htm')).toBe(true);
+    expect(isHtmlTab('/var/www/INDEX.HTML')).toBe(true);
+    expect(isHtmlTab('C:\\site\\legacy.HTM')).toBe(true);
+  });
+
+  it('returns true when explicit languageId is html regardless of filename', () => {
+    expect(isHtmlTab('Untitled-1', 'html')).toBe(true);
+    expect(isHtmlTab(null, 'html')).toBe(true);
+    expect(isHtmlTab('snippet.txt', 'html')).toBe(true);
+  });
+
+  it('returns false for non-html files without html languageId', () => {
+    expect(isHtmlTab('README.md', 'markdown')).toBe(false);
+    expect(isHtmlTab('app.tsx', 'typescript')).toBe(false);
+    expect(isHtmlTab(null)).toBe(false);
+    expect(isHtmlTab('')).toBe(false);
+  });
+
+  it('identifies both Markdown and HTML tabs as previewable', () => {
+    expect(isPreviewableTab('README.md')).toBe(true);
+    expect(isPreviewableTab('index.html')).toBe(true);
+    expect(isPreviewableTab('landing.htm')).toBe(true);
+    expect(isPreviewableTab('Untitled-1', 'html')).toBe(true);
+    expect(isPreviewableTab('Untitled-1', 'markdown')).toBe(true);
+    expect(isPreviewableTab('script.js', 'javascript')).toBe(false);
+  });
+});
+
+describe('prepareHtmlForPreview', () => {
+  it('returns raw HTML unchanged when baseFilePath is null or empty', () => {
+    const raw = '<!doctype html><html><body><h1>Hello</h1></body></html>';
+    expect(prepareHtmlForPreview(raw)).toBe(raw);
+    expect(prepareHtmlForPreview(raw, { baseFilePath: null })).toBe(raw);
+  });
+
+  it('injects a <base> tag inside <head> when baseFilePath is provided', () => {
+    const raw = '<!doctype html><html><head><title>Test</title></head><body><img src="logo.png"></body></html>';
+    const prepared = prepareHtmlForPreview(raw, { baseFilePath: '/Users/alice/site/index.htm' });
+    expect(prepared).toContain(
+      '<head><base href="awapi-asset://local/Users/alice/site/"><title>Test</title>',
+    );
+  });
+
+  it('prepends a <base> tag when the HTML fragment has no <head>', () => {
+    const raw = '<h1>Fragment</h1><img src="./banner.png">';
+    const prepared = prepareHtmlForPreview(raw, { baseFilePath: '/Users/alice/site/page.html' });
+    expect(prepared).toBe(
+      '<base href="awapi-asset://local/Users/alice/site/"><h1>Fragment</h1><img src="./banner.png">',
+    );
+  });
+
+  it('does not inject a duplicate <base> tag if one already exists', () => {
+    const raw = '<html><head><base href="https://example.com/"></head><body>Hi</body></html>';
+    expect(prepareHtmlForPreview(raw, { baseFilePath: '/Users/alice/site/index.html' })).toBe(raw);
   });
 });
 

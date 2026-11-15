@@ -26,7 +26,8 @@ Awapi Editor is a fast, lightweight, universal text editor built specifically fo
 - Store project skills in `.agents/skills/<skill-name>/SKILL.md` using the open Agent Skills specification so they remain generic and portable across agents, rather than under `.github/skills/`:
   - [electron-ipc](./.agents/skills/electron-ipc/SKILL.md) — Adding or updating Electron IPC channels across Main, Preload, and Renderer.
   - [testing](./.agents/skills/testing/SKILL.md) — Writing and running Vitest & React Testing Library unit/component tests and typechecking.
-  - [release](./.agents/skills/release/SKILL.md) — Packaging, cutting, and publishing cross-platform releases (`.dmg`, `.exe`, `.msi`, `.AppImage`, `.deb`).
+  - [release](./.agents/skills/release/SKILL.md) — `/release`: cut and publish the next version (`0.4.9 → 0.5.0`), plus packaging cross-platform releases (`.dmg`, `.exe`, `.msi`, `.AppImage`, `.deb`).
+  - [gitpush](./.agents/skills/gitpush/SKILL.md) — `/gitpush`: commit all changes with a meaningful Conventional Commits message and push.
 
 ## 🚨 CRITICAL: Testing Requirements
 - **Unit Tests are Mandatory:** Whenever you create a new method, function, or UI component—or modify an existing one—you MUST add and update the corresponding unit tests immediately.
@@ -36,4 +37,4 @@ Awapi Editor is a fast, lightweight, universal text editor built specifically fo
 - Never leave a function untested if it contains core application logic or state transformations (e.g., file saving logic, tab parsing).
 
 ## 🚨 CRITICAL: Git Operations
-- **Never run `git add`, `git commit`, or `git push` automatically.** Do not stage, commit, or push changes unless the user explicitly asks you to do so in their current request.
+- **Never run `git add`, `git commit`, or `git push` automatically.** Do not stage, commit, or push changes unless the user explicitly asks you to do so in their current request. Running `/gitpush` or `/release` counts as that explicit request.

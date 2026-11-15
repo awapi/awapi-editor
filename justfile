@@ -102,6 +102,24 @@ release version mode="draft":
     @echo "Tag pushed. GitHub Actions is now building and uploading to a draft release."
     @just _release-{{mode}} {{version}}
 
+# Bumps the last digit of the highest of package.json / the latest GitHub tag,
+# rolling each digit over after 9 (0.4.8 -> 0.4.9 -> 0.5.0).
+#
+#   just release-next            # draft only (default)
+#   just release-next publish    # draft + auto-publish when CI finishes
+#
+# Release the next version automatically (see scripts/next-version.mjs)
+[windows]
+release-next mode="draft":
+    just release (node scripts/next-version.mjs --verbose) {{mode}}
+[unix]
+release-next mode="draft":
+    just release "$(node scripts/next-version.mjs --verbose)" {{mode}}
+
+# Print the version `just release-next` would release, without changing anything.
+next-version:
+    node scripts/next-version.mjs --verbose
+
 _release-draft version:
     @echo "  Draft will remain a draft. Publish later with: just publish {{version}}"
 

@@ -3,8 +3,13 @@
 ## Cutting a release
 
 1. Ensure `main` is green (CI passes).
-2. Run `just release X.Y.Z` — bumps the version, commits, tags, and pushes.
+2. Run `just release-next` (or `just release-next publish`) — picks the next
+   version automatically (last digit +1, each digit rolls over after 9:
+   `0.4.9 → 0.5.0`, `0.9.9 → 1.0.0`), then bumps, commits, tags, and pushes.
+   Preview the version with `just next-version`. To choose a version
+   explicitly, run `just release X.Y.Z` instead.
    CI picks up the tag and builds installers on all three platforms.
+   AI agents can do all of this with the `/release` skill.
 
 ## Packaging targets
 

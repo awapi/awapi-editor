@@ -12,6 +12,7 @@ export default defineConfig({
       '**/*.{test,spec}.?(c|m)[jt]s?(x)',
       '../main/**/*.{test,spec}.?(c|m)[jt]s?(x)',
       '../shared/**/*.{test,spec}.?(c|m)[jt]s?(x)',
+      '../../scripts/**/*.{test,spec}.?(c|m)[jt]s?(x)',
     ],
   },
   plugins: [

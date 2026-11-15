@@ -126,7 +126,9 @@ just build
 
 To automatically trigger a version tag and GitHub Actions build:
 ```bash
-just release 0.2.0
+just release-next          # next version, e.g. 0.4.9 -> 0.5.0 (draft release)
+just release-next publish  # same, and publish once CI finishes
+just release 0.2.0         # explicit version
 ```
 
 ## 🤝 Contributing

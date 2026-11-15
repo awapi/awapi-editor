@@ -2,6 +2,17 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EncodingKind } from '../shared/encodings';
 import type { PtyCreateOptions, PtyCreateResult, PtyDataEvent, PtyExitEvent, TerminalChoices } from '../shared/terminal';
 
+/** Payload describing one editor tab rendered in a Markdown / HTML preview window. */
+interface MarkdownPreviewPayload {
+  /** Editor tab the preview belongs to; each tab gets its own preview window. */
+  tabId?: string;
+  title: string;
+  filePath: string | null;
+  content: string;
+  theme?: 'light' | 'dark';
+  mode?: 'markdown' | 'html' | 'unsupported';
+}
+
 export const electronAPI = {
   /** Resolves with every file that could be read, or null if canceled / none could be read. */
   openFileDialog: () =>
@@ -178,51 +189,25 @@ export const electronAPI = {
   onMoveToMain: (callback: () => void) => ipcRenderer.on('menu:moveToMain', () => callback()),
   onAddTab: (callback: (tabData: unknown) => void) => ipcRenderer.on('menu:addTab', (_, tabData) => callback(tabData)),
 
-  // Markdown / HTML preview popup window
-  openMarkdownPreview: (data: {
-    title: string;
-    filePath: string | null;
-    content: string;
-    theme?: 'light' | 'dark';
-    mode?: 'markdown' | 'html' | 'unsupported';
-  }) => ipcRenderer.invoke('markdown:openPreview', data),
-  updateMarkdownPreview: (data: {
-    title: string;
-    filePath: string | null;
-    content: string;
-    theme?: 'light' | 'dark';
-    mode?: 'markdown' | 'html' | 'unsupported';
-  }) => ipcRenderer.invoke('markdown:updatePreview', data),
+  // Markdown / HTML preview popup windows (one per editor tab, keyed by `tabId`)
+  openMarkdownPreview: (data: MarkdownPreviewPayload) =>
+    ipcRenderer.invoke('markdown:openPreview', data) as Promise<boolean>,
+  updateMarkdownPreview: (data: MarkdownPreviewPayload) =>
+    ipcRenderer.invoke('markdown:updatePreview', data),
+  closeMarkdownPreview: (tabId: string) => ipcRenderer.invoke('markdown:closePreview', tabId),
   getMarkdownPreviewData: () => ipcRenderer.invoke('markdown:getPreviewData'),
-  onMarkdownPreviewUpdate: (
-    callback: (data: {
-      title: string;
-      filePath: string | null;
-      content: string;
-      theme?: 'light' | 'dark';
-      mode?: 'markdown' | 'html' | 'unsupported';
-    }) => void,
-  ) => {
-    const listener = (
-      _: unknown,
-      data: {
-        title: string;
-        filePath: string | null;
-        content: string;
-        theme?: 'light' | 'dark';
-        mode?: 'markdown' | 'html' | 'unsupported';
-      },
-    ) => callback(data);
+  onMarkdownPreviewUpdate: (callback: (data: MarkdownPreviewPayload) => void) => {
+    const listener = (_: unknown, data: MarkdownPreviewPayload) => callback(data);
     ipcRenderer.on('markdown:previewUpdate', listener);
     return () => {
       ipcRenderer.removeListener('markdown:previewUpdate', listener);
     };
   },
   onMarkdownPreview: (callback: () => void) => ipcRenderer.on('menu:markdownPreview', () => callback()),
-  getMarkdownPreviewOpen: () => ipcRenderer.invoke('markdown:isPreviewOpen') as Promise<boolean>,
-  onMarkdownPreviewVisibilityChanged: (callback: (isOpen: boolean) => void) =>
-    ipcRenderer.on('markdown:previewVisibilityChanged', (_, isOpen: boolean) => callback(isOpen)),
-
+  getOpenMarkdownPreviewTabIds: () =>
+    ipcRenderer.invoke('markdown:getOpenPreviewTabIds') as Promise<string[]>,
+  onMarkdownPreviewVisibilityChanged: (callback: (openTabIds: string[]) => void) =>
+    ipcRenderer.on('markdown:previewVisibilityChanged', (_, openTabIds: string[]) => callback(openTabIds)),
   // Cleanup listeners
   removeListeners: () => {
     ipcRenderer.removeAllListeners('menu:new');

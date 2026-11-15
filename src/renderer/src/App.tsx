@@ -89,7 +89,8 @@ const App: React.FC = () => {
   const [isGoToLineOpen, setIsGoToLineOpen] = useState(false);
   const [isFindInTabsOpen, setIsFindInTabsOpen] = useState(false);
   const [isExplorerOpen, setIsExplorerOpen] = useState(false);
-  const [isMarkdownPreviewOpen, setIsMarkdownPreviewOpen] = useState(false);
+  // Tabs of this window that currently have their own preview popup open.
+  const [openPreviewTabIds, setOpenPreviewTabIds] = useState<string[]>([]);
   const [explorerFolderPath, setExplorerFolderPath] = useState<string | null>(null);
   const [favoriteFolders, setFavoriteFolders] = useState<string[]>([]);
   const [explorerRefreshToken, setExplorerRefreshToken] = useState(0);
@@ -944,23 +945,18 @@ const App: React.FC = () => {
         if (id) openMarkdownPreviewForTab(id);
       });
 
-      w.electronAPI.onMarkdownPreviewVisibilityChanged?.((isOpen: boolean) => {
-        setIsMarkdownPreviewOpen(Boolean(isOpen));
+      w.electronAPI.onMarkdownPreviewVisibilityChanged?.((openTabIds: string[]) => {
+        setOpenPreviewTabIds(Array.isArray(openTabIds) ? openTabIds : []);
       });
 
-      if (w.electronAPI.getMarkdownPreviewOpen) {
-        Promise.resolve(w.electronAPI.getMarkdownPreviewOpen())
-          .then((flag: boolean) => setIsMarkdownPreviewOpen(Boolean(flag)))
-          .catch(() => {});
-      }
-
       const syncPreviewOpenOnFocus = () => {
-        if (w.electronAPI?.getMarkdownPreviewOpen) {
-          Promise.resolve(w.electronAPI.getMarkdownPreviewOpen())
-            .then((flag: boolean) => setIsMarkdownPreviewOpen(Boolean(flag)))
+        if (w.electronAPI?.getOpenMarkdownPreviewTabIds) {
+          Promise.resolve(w.electronAPI.getOpenMarkdownPreviewTabIds())
+            .then((ids: unknown) => setOpenPreviewTabIds(Array.isArray(ids) ? ids : []))
             .catch(() => {});
         }
       };
+      syncPreviewOpenOnFocus();
       window.addEventListener('focus', syncPreviewOpenOnFocus);
 
       if (isPopoutMode) {
@@ -1519,6 +1515,7 @@ const App: React.FC = () => {
     const isHtml = isHtmlTab(tab.filePath ?? tab.title, tabLang);
     const mode = isHtml ? ('html' as const) : !isMarkdown ? ('unsupported' as const) : undefined;
     return {
+      tabId: tab.id,
       title: tab.title,
       filePath: tab.filePath,
       content: isMarkdown || isHtml ? tab.content : '',
@@ -1527,6 +1524,11 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // Last payload sent to each open preview, so live updates only go out when something changed.
+  const lastPreviewPayloadRef = React.useRef(new Map<string, string>());
+
+  // Opens a separate preview popup for the tab, or focuses it when that tab
+  // already has one. Never closes a preview; other tabs' previews are left untouched.
   const openMarkdownPreviewForTab = React.useCallback(
     (tabId: string) => {
       const tab = tabsRef.current.find(t => t.id === tabId);
@@ -1536,66 +1538,43 @@ const App: React.FC = () => {
       }
       setTabContextMenu(null);
       const w = window as any;
-      Promise.resolve(w.electronAPI?.openMarkdownPreview?.(buildMarkdownPreviewPayload(tab)))
-        .then((result: unknown) => {
-          if (typeof result === 'boolean') {
-            setIsMarkdownPreviewOpen(result);
-          } else {
-            setIsMarkdownPreviewOpen(prev => !prev);
-          }
+      const payload = buildMarkdownPreviewPayload(tab);
+      Promise.resolve(w.electronAPI?.openMarkdownPreview?.(payload))
+        .then(() => {
+          lastPreviewPayloadRef.current.set(tabId, JSON.stringify(payload));
+          setOpenPreviewTabIds(prev => (prev.includes(tabId) ? prev : [...prev, tabId]));
         })
         .catch(() => {});
     },
     [buildMarkdownPreviewPayload],
   );
 
-  // Live-refresh the Markdown / HTML preview popup whenever the active tab's
-  // content, title, filePath, theme, or preview support changes.
+  // Live-refresh every open preview popup with its own tab's content, title,
+  // filePath, theme, and preview support. Previews whose tab was closed are closed too.
   useEffect(() => {
     const w = window as any;
-    if (!w.electronAPI?.updateMarkdownPreview) return;
-    if (!activeTab) {
-      const fallbackTheme: 'light' | 'dark' = currentTheme === 'light' ? 'light' : 'dark';
-      const timer = setTimeout(() => {
-        void w.electronAPI?.updateMarkdownPreview?.({
-          title: 'No Active File',
-          filePath: null,
-          content: '',
-          theme: fallbackTheme,
-          mode: 'unsupported',
-        });
-      }, 60);
-      return () => clearTimeout(timer);
-    }
-    const resolvedTheme: 'light' | 'dark' =
-      activeTab.themeOverride ?? (currentTheme === 'light' ? 'light' : 'dark');
-    const mode = isActiveTabHtml
-      ? ('html' as const)
-      : !isActiveTabPreviewable
-        ? ('unsupported' as const)
-        : undefined;
-    const nextContent = isActiveTabPreviewable ? activeTab.content : '';
+    if (!w.electronAPI?.updateMarkdownPreview || openPreviewTabIds.length === 0) return;
     const timer = setTimeout(() => {
-      void w.electronAPI?.updateMarkdownPreview?.({
-        title: activeTab.title,
-        filePath: activeTab.filePath,
-        content: nextContent,
-        theme: resolvedTheme,
-        ...(mode ? { mode } : {}),
-      });
+      const lastSent = lastPreviewPayloadRef.current;
+      for (const tabId of openPreviewTabIds) {
+        const tab = tabs.find(t => t.id === tabId);
+        if (!tab) {
+          // Only close previews of tabs this window has seen, not ones whose tabs are still loading.
+          if (lastSent.has(tabId)) {
+            lastSent.delete(tabId);
+            void w.electronAPI?.closeMarkdownPreview?.(tabId);
+          }
+          continue;
+        }
+        const payload = buildMarkdownPreviewPayload(tab);
+        const serialized = JSON.stringify(payload);
+        if (lastSent.get(tabId) === serialized) continue;
+        lastSent.set(tabId, serialized);
+        void w.electronAPI?.updateMarkdownPreview?.(payload);
+      }
     }, 60);
     return () => clearTimeout(timer);
-  }, [
-    activeTab?.id,
-    activeTab?.title,
-    activeTab?.filePath,
-    isActiveTabPreviewable ? activeTab?.content : '',
-    activeTab?.themeOverride,
-    isActiveTabPreviewable,
-    isActiveTabHtml,
-    currentTheme,
-  ]);
-
+  }, [tabs, openPreviewTabIds, currentTheme, buildMarkdownPreviewPayload]);
   const setActiveTabCsvViewMode = (mode: 'grid' | 'text') => {
     if (!activeTabId) return;
     setTabs(prev => prev.map(t => (t.id === activeTabId ? { ...t, csvViewMode: mode } : t)));
@@ -2145,26 +2124,9 @@ const App: React.FC = () => {
           {activeTab && isActiveTabPreviewable && (
             <button
               data-testid="markdown-preview-button"
-              aria-label={
-                isMarkdownPreviewOpen
-                  ? isActiveTabHtml
-                    ? 'Close HTML Preview'
-                    : 'Close Markdown Preview'
-                  : isActiveTabHtml
-                    ? 'Open HTML Preview'
-                    : 'Open Markdown Preview'
-              }
-              aria-pressed={isMarkdownPreviewOpen}
+              aria-label={isActiveTabHtml ? 'Open HTML Preview' : 'Open Markdown Preview'}
               onClick={() => openMarkdownPreviewForTab(activeTab.id)}
-              title={
-                isMarkdownPreviewOpen
-                  ? isActiveTabHtml
-                    ? 'Close HTML Preview Popup (Cmd/Ctrl+Shift+V)'
-                    : 'Close Markdown Preview Popup (Cmd/Ctrl+Shift+V)'
-                  : isActiveTabHtml
-                    ? 'Open HTML Preview in Popup Window (Cmd/Ctrl+Shift+V)'
-                    : 'Open Markdown Preview in Popup Window (Cmd/Ctrl+Shift+V)'
-              }
+              title={isActiveTabHtml ? 'Open HTML Preview in Popup Window (Cmd/Ctrl+Shift+V)' : 'Open Markdown Preview in Popup Window (Cmd/Ctrl+Shift+V)'}
               style={{
                 height: '24px',
                 display: 'inline-flex',
@@ -2174,10 +2136,10 @@ const App: React.FC = () => {
                 padding: '0 8px',
                 cursor: 'pointer',
                 borderRadius: '4px',
-                border: `1px solid ${isMarkdownPreviewOpen ? colors.tabBorder : colors.tabHover}`,
-                backgroundColor: isMarkdownPreviewOpen ? colors.tabActiveBackground : colors.tabBackground,
+                border: `1px solid ${colors.tabHover}`,
+                backgroundColor: colors.tabBackground,
                 color: colors.foreground,
-                opacity: isMarkdownPreviewOpen ? 1 : 0.55,
+                opacity: 0.85,
                 fontSize: '11px',
                 fontWeight: 600,
               }}
@@ -2235,26 +2197,9 @@ const App: React.FC = () => {
           {isActiveTabPreviewable && (
             <button
               data-testid="markdown-preview-button"
-              aria-label={
-                isMarkdownPreviewOpen
-                  ? isActiveTabHtml
-                    ? 'Close HTML Preview'
-                    : 'Close Markdown Preview'
-                  : isActiveTabHtml
-                    ? 'Open HTML Preview'
-                    : 'Open Markdown Preview'
-              }
-              aria-pressed={isMarkdownPreviewOpen}
+              aria-label={isActiveTabHtml ? 'Open HTML Preview' : 'Open Markdown Preview'}
               onClick={() => openMarkdownPreviewForTab(activeTab.id)}
-              title={
-                isMarkdownPreviewOpen
-                  ? isActiveTabHtml
-                    ? 'Close HTML Preview Popup (Cmd/Ctrl+Shift+V)'
-                    : 'Close Markdown Preview Popup (Cmd/Ctrl+Shift+V)'
-                  : isActiveTabHtml
-                    ? 'Open HTML Preview in Popup Window (Cmd/Ctrl+Shift+V)'
-                    : 'Open Markdown Preview in Popup Window (Cmd/Ctrl+Shift+V)'
-              }
+              title={isActiveTabHtml ? 'Open HTML Preview in Popup Window (Cmd/Ctrl+Shift+V)' : 'Open Markdown Preview in Popup Window (Cmd/Ctrl+Shift+V)'}
               style={{
                 height: '22px',
                 display: 'inline-flex',
@@ -2263,10 +2208,10 @@ const App: React.FC = () => {
                 padding: '0 8px',
                 cursor: 'pointer',
                 borderRadius: '4px',
-                border: `1px solid ${isMarkdownPreviewOpen ? colors.tabBorder : colors.tabHover}`,
-                backgroundColor: isMarkdownPreviewOpen ? colors.tabActiveBackground : colors.tabBackground,
+                border: `1px solid ${colors.tabHover}`,
+                backgroundColor: colors.tabBackground,
                 color: colors.foreground,
-                opacity: isMarkdownPreviewOpen ? 1 : 0.55,
+                opacity: 0.85,
                 fontSize: '11px',
                 fontWeight: 600,
                 flexShrink: 0,

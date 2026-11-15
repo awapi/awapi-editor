@@ -2,7 +2,7 @@
 
 ![Awapi Editor Icon](../build/icon-64x64.png "Awapi Editor")
 
-This is a second Markdown sample (`samples/sample-notes.md`) so you can test **switching between multiple Markdown tabs** while the live preview popup is open.
+This is a second Markdown sample (`samples/sample-notes.md`) so you can test **multiple Markdown preview popups** open side by side.
 
 ---
 
@@ -24,7 +24,7 @@ Awapi Editor separates responsibilities across three Electron layers:
 
 ## Performance Checklist
 
-- [x] Instant tab switching with live Markdown preview updates
+- [x] One live preview popup per Markdown tab
 - [x] Magnetic docking to the right edge of the main editor window
 - [x] Local image resolution via `awapi-asset://` protocol
 - [x] Automatic light/dark theme synchronization
@@ -56,4 +56,4 @@ Awapi Editor separates responsibilities across three Electron layers:
 }
 ```
 
-> **Tip:** Click back and forth between `sample.md` and `sample-notes.md` in the editor tab bar—the preview window automatically updates to display whichever Markdown tab is active!
+> **Tip:** Open the preview for `sample.md`, then switch to `sample-notes.md` and open its preview too—each tab gets its own preview window, and each one live-updates as you edit its file. Previews stay above other apps only when pinned.

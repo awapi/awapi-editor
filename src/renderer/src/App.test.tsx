@@ -2546,18 +2546,15 @@ describe('Editor Core Tests', () => {
     it('shows the Preview button and context menu option for Markdown tabs and syncs live updates', async () => {
       const api = (window as any).electronAPI;
       let markdownMenuCb: (() => void) | undefined;
-      let previewVisibilityCb: ((isOpen: boolean) => void) | undefined;
+      let previewVisibilityCb: ((openTabIds: string[]) => void) | undefined;
       api.onMarkdownPreview = vi.fn((cb: () => void) => {
         markdownMenuCb = cb;
       });
-      api.onMarkdownPreviewVisibilityChanged = vi.fn((cb: (isOpen: boolean) => void) => {
+      api.onMarkdownPreviewVisibilityChanged = vi.fn((cb: (openTabIds: string[]) => void) => {
         previewVisibilityCb = cb;
       });
-      let previewOpenState = false;
-      api.openMarkdownPreview = vi.fn().mockImplementation(async () => {
-        previewOpenState = !previewOpenState;
-        return previewOpenState;
-      });
+      api.openMarkdownPreview = vi.fn().mockResolvedValue(true);
+      api.closeMarkdownPreview = vi.fn().mockResolvedValue(undefined);
       api.updateMarkdownPreview = vi.fn().mockResolvedValue(undefined);
       api.readFile = vi.fn(async (filePath: string) => ({
         filePath,
@@ -2590,37 +2587,33 @@ describe('Editor Core Tests', () => {
       render(<ThemeProvider><App /></ThemeProvider>);
       await waitFor(() => screen.getByText(/README\.md/));
 
-      // Preview button is visible when README.md is active and starts unpressed
+      // Preview button is a plain "open" action with no on/off state
       const previewBtn = screen.getByTestId('markdown-preview-button');
-      expect(previewBtn).toBeTruthy();
-      expect(previewBtn.getAttribute('aria-pressed')).toBe('false');
+      expect(previewBtn.getAttribute('aria-pressed')).toBeNull();
+      expect(previewBtn.getAttribute('aria-label')).toBe('Open Markdown Preview');
 
-      // First click opens the preview and marks the toggle button active
       fireEvent.click(previewBtn);
       expect(api.openMarkdownPreview).toHaveBeenCalledWith({
+        tabId: 'tab-md',
         title: 'README.md',
         filePath: '/workspace/README.md',
         content: '# Initial Doc',
         theme: 'dark',
       });
-      await waitFor(() => expect(previewBtn.getAttribute('aria-pressed')).toBe('true'));
 
-      // Second click toggles the preview closed
+      // Clicking again only asks main to open/focus this tab's preview; it never closes it
       fireEvent.click(previewBtn);
-      await waitFor(() => expect(previewBtn.getAttribute('aria-pressed')).toBe('false'));
+      await waitFor(() => expect(api.openMarkdownPreview).toHaveBeenCalledTimes(2));
+      expect(api.closeMarkdownPreview).not.toHaveBeenCalled();
+      expect(previewBtn.getAttribute('aria-label')).toBe('Open Markdown Preview');
 
-      // External close/open broadcast from main updates the button state
-      act(() => {
-        previewVisibilityCb?.(true);
-      });
-      expect(previewBtn.getAttribute('aria-pressed')).toBe('true');
-
-      // Editing the markdown content sends a live update to the preview popup
+      // Editing the markdown content sends a live update to that tab's preview popup
       act(() => {
         capturedEditorOnChange?.('# Updated Live Content');
       });
       await waitFor(() => {
         expect(api.updateMarkdownPreview).toHaveBeenCalledWith({
+          tabId: 'tab-md',
           title: 'README.md',
           filePath: '/workspace/README.md',
           content: '# Updated Live Content',
@@ -2634,32 +2627,82 @@ describe('Editor Core Tests', () => {
       expect(contextItem).toBeTruthy();
       fireEvent.click(contextItem);
       expect(api.openMarkdownPreview).toHaveBeenLastCalledWith({
+        tabId: 'tab-md',
         title: 'README.md',
         filePath: '/workspace/README.md',
         content: '# Updated Live Content',
         theme: 'dark',
       });
 
-      // Triggering via View -> Open Markdown Preview menu IPC also toggles preview
+      // Triggering via View -> Open Markdown Preview menu IPC also opens/focuses the preview
       act(() => {
         markdownMenuCb?.();
       });
       expect(api.openMarkdownPreview).toHaveBeenCalledTimes(4);
 
-      // Switching to a non-Markdown tab hides the toolbar Preview button and updates preview to unsupported
+      // Switching to a non-Markdown tab hides the toolbar Preview button and does
+      // not retarget README.md's preview to the newly active tab
+      act(() => {
+        previewVisibilityCb?.(['tab-md']);
+      });
       fireEvent.click(screen.getByText(/index\.js/));
       expect(screen.queryByTestId('markdown-preview-button')).toBeNull();
-      await waitFor(() => {
-        expect(api.updateMarkdownPreview).toHaveBeenCalledWith({
-          title: 'index.js',
-          filePath: '/workspace/index.js',
-          content: '',
-          theme: 'dark',
-          mode: 'unsupported',
-        });
-      });
+      await new Promise(resolve => setTimeout(resolve, 120));
+      expect(api.updateMarkdownPreview).not.toHaveBeenCalledWith(
+        expect.objectContaining({ tabId: 'tab-js' }),
+      );
     });
 
+    it('opens a separate preview per tab, updates each independently, and closes a preview with its tab', async () => {
+      const api = (window as any).electronAPI;
+      let closeTabCb: (() => void) | undefined;
+      api.onCloseTab = vi.fn((cb: () => void) => {
+        closeTabCb = cb;
+      });
+      api.openMarkdownPreview = vi.fn().mockResolvedValue(true);
+      api.updateMarkdownPreview = vi.fn().mockResolvedValue(undefined);
+      api.closeMarkdownPreview = vi.fn().mockResolvedValue(undefined);
+      api.loadSession.mockResolvedValue({
+        activeTabId: 'tab-a',
+        tabs: [
+          { id: 'tab-a', title: 'a.md', filePath: null, content: '# A', isDirty: true, eol: 'LF' },
+          { id: 'tab-b', title: 'b.md', filePath: null, content: '# B', isDirty: true, eol: 'LF' },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/a\.md/));
+
+      fireEvent.click(screen.getByTestId('markdown-preview-button'));
+      await waitFor(() => expect(api.openMarkdownPreview).toHaveBeenCalledTimes(1));
+
+      // Switching to b.md and clicking Preview opens a second preview for b.md
+      fireEvent.click(screen.getByText(/b\.md/));
+      await waitFor(() => expect(screen.getByTestId('markdown-preview-button')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('markdown-preview-button'));
+      await waitFor(() => expect(api.openMarkdownPreview).toHaveBeenCalledTimes(2));
+      expect(api.openMarkdownPreview).toHaveBeenNthCalledWith(1, expect.objectContaining({ tabId: 'tab-a', content: '# A' }));
+      expect(api.openMarkdownPreview).toHaveBeenNthCalledWith(2, expect.objectContaining({ tabId: 'tab-b', content: '# B' }));
+
+      // Editing b.md updates only b.md's preview
+      act(() => {
+        capturedEditorOnChange?.('# B edited');
+      });
+      await waitFor(() =>
+        expect(api.updateMarkdownPreview).toHaveBeenCalledWith(
+          expect.objectContaining({ tabId: 'tab-b', content: '# B edited' }),
+        ),
+      );
+      expect(api.updateMarkdownPreview).not.toHaveBeenCalledWith(expect.objectContaining({ tabId: 'tab-a' }));
+
+      // Closing b.md closes its preview; a.md's preview stays open
+      api.confirmUnsavedChanges = vi.fn().mockResolvedValue('dont-save');
+      await act(async () => {
+        closeTabCb?.();
+      });
+      await waitFor(() => expect(api.closeMarkdownPreview).toHaveBeenCalledWith('tab-b'));
+      expect(api.closeMarkdownPreview).not.toHaveBeenCalledWith('tab-a');
+    });
     it('shows the Preview button and context menu option for .html and .htm tabs and syncs live updates', async () => {
       const api = (window as any).electronAPI;
       api.openMarkdownPreview = vi.fn().mockResolvedValue(true);
@@ -2692,6 +2735,7 @@ describe('Editor Core Tests', () => {
 
       fireEvent.click(previewBtn);
       expect(api.openMarkdownPreview).toHaveBeenCalledWith({
+        tabId: 'tab-htm',
         title: 'page.htm',
         filePath: '/workspace/page.htm',
         content: '<h1>Hello HTM</h1>',
@@ -2705,6 +2749,7 @@ describe('Editor Core Tests', () => {
       });
       await waitFor(() => {
         expect(api.updateMarkdownPreview).toHaveBeenCalledWith({
+          tabId: 'tab-htm',
           title: 'page.htm',
           filePath: '/workspace/page.htm',
           content: '<h1>Updated HTM</h1>',

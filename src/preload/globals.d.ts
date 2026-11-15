@@ -234,6 +234,7 @@ declare global {
       }) => void) => void;
 
       openMarkdownPreview: (data: {
+        tabId?: string;
         title: string;
         filePath: string | null;
         content: string;
@@ -241,13 +242,16 @@ declare global {
         mode?: 'markdown' | 'html' | 'unsupported';
       }) => Promise<boolean | void>;
       updateMarkdownPreview: (data: {
+        tabId?: string;
         title: string;
         filePath: string | null;
         content: string;
         theme?: 'light' | 'dark';
         mode?: 'markdown' | 'html' | 'unsupported';
       }) => Promise<void>;
+      closeMarkdownPreview: (tabId: string) => Promise<void>;
       getMarkdownPreviewData: () => Promise<{
+        tabId?: string;
         title: string;
         filePath: string | null;
         content: string;
@@ -264,8 +268,8 @@ declare global {
         }) => void
       ) => () => void;
       onMarkdownPreview: (callback: () => void) => void;
-      getMarkdownPreviewOpen: () => Promise<boolean>;
-      onMarkdownPreviewVisibilityChanged: (callback: (isOpen: boolean) => void) => void;
+      getOpenMarkdownPreviewTabIds: () => Promise<string[]>;
+      onMarkdownPreviewVisibilityChanged: (callback: (openTabIds: string[]) => void) => void;
 
       removeListeners: () => void;
     };

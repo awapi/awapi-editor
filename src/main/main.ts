@@ -32,6 +32,10 @@ import {
 } from './shortcuts';
 import {
   createMarkdownPreviewManager,
+  getCascadedPosition,
+  getDockedPreviewX,
+  normalizeMarkdownPreviewData,
+  normalizePreviewTabId,
   type MarkdownPreviewData,
 } from './markdownPreviewManager';
 import {
@@ -266,11 +270,10 @@ function createWindow() {
       const win = BrowserWindow.fromId(winId);
       win?.destroy();
     }
-    const previewWinId = markdownPreviewManager.getWindowId();
-    if (previewWinId !== null) {
+    for (const previewWinId of markdownPreviewManager.getWindowIds()) {
       BrowserWindow.fromId(previewWinId)?.destroy();
-      markdownPreviewManager.clear();
     }
+    markdownPreviewManager.clear();
   });
   // On macOS the app outlives its windows; drop the destroyed window so menu
   // rebuilds (e.g. Clear Recent) don't touch it.
@@ -278,22 +281,15 @@ function createWindow() {
     mainWindow = null;
   });
 
-  // When the Markdown preview popup is magnetically docked to the main window's
+  // When a Markdown preview popup is magnetically docked to the main window's
   // right edge, moving or resizing the main window moves the preview along with it.
+  // Previews are otherwise ordinary windows: they only stay above other apps
+  // when the user pins them (Always on Top).
   mainWindow.on('move', () => {
-    syncDockedMarkdownPreviewToMain();
+    syncDockedMarkdownPreviewsToMain();
   });
   mainWindow.on('resize', () => {
-    syncDockedMarkdownPreviewToMain();
-  });
-  // When the user clicks back on the main editor window (after another app like
-  // VS Code was covering the preview), raise the preview window to the front too
-  // while keeping keyboard focus in the main editor.
-  mainWindow.on('focus', () => {
-    bringMarkdownPreviewToFront();
-  });
-  mainWindow.on('restore', () => {
-    bringMarkdownPreviewToFront();
+    syncDockedMarkdownPreviewsToMain();
   });
 
   // Handle Ctrl++ (Ctrl+Shift+=) for zoom in — the menu only registers Ctrl+=.
@@ -1254,7 +1250,6 @@ ipcMain.handle('window:confirmClose', (event) => {
 // ── Markdown Preview popup window ─────────────────────────────────────────────
 const markdownPreviewManager = createMarkdownPreviewManager();
 let isProgrammaticPreviewMove = false;
-let previewSnapTimer: ReturnType<typeof setTimeout> | null = null;
 
 function setPreviewPositionProgrammatically(win: BrowserWindow, x: number, y: number): void {
   if (win.isDestroyed()) return;
@@ -1270,42 +1265,34 @@ function setPreviewPositionProgrammatically(win: BrowserWindow, x: number, y: nu
   }
 }
 
-function syncDockedMarkdownPreviewToMain(): void {
+function syncDockedMarkdownPreviewsToMain(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const previewWinId = markdownPreviewManager.getWindowId();
-  if (previewWinId === null) return;
-  const previewWin = BrowserWindow.fromId(previewWinId);
-  if (!previewWin || previewWin.isDestroyed() || previewWin.isMinimized()) return;
-  const nextPos = markdownPreviewManager.onMainBoundsChanged(mainWindow.getBounds());
-  if (!nextPos) return;
-  setPreviewPositionProgrammatically(previewWin, nextPos.x, nextPos.y);
+  for (const { windowId, x, y } of markdownPreviewManager.onMainBoundsChanged(mainWindow.getBounds())) {
+    const previewWin = BrowserWindow.fromId(windowId);
+    if (!previewWin || previewWin.isDestroyed() || previewWin.isMinimized()) continue;
+    setPreviewPositionProgrammatically(previewWin, x, y);
+  }
 }
 
 /**
- * Raises the Markdown preview popup to the top of the window stack (above
- * other apps like VS Code) without stealing keyboard focus from `mainWindow`.
- * On Windows, temporarily toggling `alwaysOnTop` on the preview window forces
- * the OS window manager to bring it above other foreground applications even
- * when it does not have input focus.
+ * Initial position for a new preview window: docked to the main window's right
+ * edge when no other preview is docked there, otherwise cascaded from the most
+ * recently opened preview so windows don't stack exactly on top of each other.
  */
-function bringMarkdownPreviewToFront(): void {
-  const previewWinId = markdownPreviewManager.getWindowId();
-  if (previewWinId === null) return;
-  const previewWin = BrowserWindow.fromId(previewWinId);
-  if (!previewWin || previewWin.isDestroyed() || previewWin.isMinimized()) return;
-
-  const alreadyPinned = isWindowAlwaysOnTop(previewWin);
-  if (alreadyPinned) {
-    previewWin.moveTop();
-    return;
+function getInitialPreviewPlacement(
+  mainBounds: Electron.Rectangle | null,
+): { x: number; y: number; dock: boolean } | null {
+  if (mainBounds && !markdownPreviewManager.hasDockedPreview()) {
+    return { x: getDockedPreviewX(mainBounds), y: mainBounds.y, dock: true };
   }
-
-  previewWin.setAlwaysOnTop(true);
-  previewWin.showInactive();
-  previewWin.moveTop();
-  previewWin.setAlwaysOnTop(false);
+  const previewIds = markdownPreviewManager.getWindowIds();
+  const lastId = previewIds[previewIds.length - 1];
+  const lastWin = lastId !== undefined ? BrowserWindow.fromId(lastId) : null;
+  if (lastWin && !lastWin.isDestroyed()) {
+    return { ...getCascadedPosition(lastWin.getBounds()), dock: false };
+  }
+  return mainBounds ? { x: getDockedPreviewX(mainBounds), y: mainBounds.y, dock: true } : null;
 }
-
 function buildMarkdownPreviewMenu(win: Electron.BrowserWindow): Electron.Menu {
   const wc = win.webContents;
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -1344,10 +1331,8 @@ function buildMarkdownPreviewMenu(win: Electron.BrowserWindow): Electron.Menu {
   return Menu.buildFromTemplate(template);
 }
 
-function sendUpdateToMarkdownPreviewWindow(data: MarkdownPreviewData): void {
-  const winId = markdownPreviewManager.getWindowId();
-  if (winId === null) return;
-  const win = BrowserWindow.fromId(winId);
+function sendUpdateToMarkdownPreviewWindow(windowId: number, data: MarkdownPreviewData): void {
+  const win = BrowserWindow.fromId(windowId);
   if (!win || win.isDestroyed()) return;
   win.setTitle(`Preview — ${data.title}`);
   const wc = win.webContents;
@@ -1356,43 +1341,70 @@ function sendUpdateToMarkdownPreviewWindow(data: MarkdownPreviewData): void {
   }
 }
 
-function broadcastMarkdownPreviewVisibility(isOpen: boolean): void {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('markdown:previewVisibilityChanged', isOpen);
-  }
-  for (const winId of popoutWindowIds) {
-    const win = BrowserWindow.fromId(winId);
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('markdown:previewVisibilityChanged', isOpen);
-    }
-  }
+/** Tells the editor window `ownerId` which of its tabs currently have a preview open. */
+function broadcastMarkdownPreviewVisibility(ownerId: number): void {
+  const owner = webContents.fromId(ownerId);
+  if (!owner || owner.isDestroyed()) return;
+  owner.send('markdown:previewVisibilityChanged', markdownPreviewManager.getOpenTabIds(ownerId));
 }
 
-ipcMain.handle('markdown:openPreview', async (_event, rawData: unknown) => {
-  const existingId = markdownPreviewManager.getWindowId();
+function forgetMarkdownPreviewWindow(winId: number): void {
+  const entry = markdownPreviewManager.remove(winId);
+  if (entry) broadcastMarkdownPreviewVisibility(entry.ownerId);
+}
+
+// Editor windows whose previews are closed automatically when the editor window goes away.
+const previewOwnersWithCleanup = new Set<number>();
+
+function closePreviewsWhenOwnerDestroyed(owner: Electron.WebContents): void {
+  if (previewOwnersWithCleanup.has(owner.id)) return;
+  previewOwnersWithCleanup.add(owner.id);
+  const ownerId = owner.id;
+  owner.once('destroyed', () => {
+    previewOwnersWithCleanup.delete(ownerId);
+    for (const winId of markdownPreviewManager.getWindowIds()) {
+      if (markdownPreviewManager.getEntry(winId)?.ownerId !== ownerId) continue;
+      markdownPreviewManager.remove(winId);
+      BrowserWindow.fromId(winId)?.close();
+    }
+  });
+}
+
+/**
+ * Opens a preview window for the sender's tab (`rawData.tabId`). Each tab gets
+ * its own preview window so several previews can be open side by side. If the
+ * tab already has a preview, that window is brought to the front and focused
+ * (and refreshed with the latest content) instead of opening a second one.
+ */
+ipcMain.handle('markdown:openPreview', async (event, rawData: unknown) => {
+  const owner = event.sender;
+  const ownerId = owner.id;
+  const tabId = normalizePreviewTabId(rawData);
+
+  const existingId = markdownPreviewManager.findWindowId(ownerId, tabId);
   if (existingId !== null) {
     const existingWin = BrowserWindow.fromId(existingId);
     if (existingWin && !existingWin.isDestroyed()) {
-      existingWin.close();
-      markdownPreviewManager.clear();
-      broadcastMarkdownPreviewVisibility(false);
-      return false;
+      const updated = markdownPreviewManager.updateData(ownerId, tabId, rawData);
+      if (updated) sendUpdateToMarkdownPreviewWindow(updated.windowId, updated.data);
+      if (existingWin.isMinimized()) existingWin.restore();
+      existingWin.show();
+      existingWin.focus();
+      return true;
     }
-    markdownPreviewManager.setWindowId(null);
+    forgetMarkdownPreviewWindow(existingId);
   }
 
-  const data = markdownPreviewManager.setData(rawData);
+  const data = normalizeMarkdownPreviewData(rawData);
 
   const initialMainBounds =
     mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
-  const initialPos = initialMainBounds
-    ? markdownPreviewManager.dockToMain(initialMainBounds)
-    : null;
+  const placement = getInitialPreviewPlacement(initialMainBounds);
 
   const previewWin = new BrowserWindow({
     width: 820,
     height: initialMainBounds ? initialMainBounds.height : 680,
-    ...(initialPos ? { x: Math.round(initialPos.x), y: Math.round(initialPos.y) } : {}),
+    ...(placement ? { x: Math.round(placement.x), y: Math.round(placement.y) } : {}),
     title: `Preview — ${data.title}`,
     icon: join(__dirname, '../../build/icon.png'),
     webPreferences: {
@@ -1402,22 +1414,25 @@ ipcMain.handle('markdown:openPreview', async (_event, rawData: unknown) => {
     },
   });
 
-  previewWin.setMenu(buildMarkdownPreviewMenu(previewWin));
-  markdownPreviewManager.setWindowId(previewWin.id);
-  if (initialMainBounds) {
-    markdownPreviewManager.dockToMain(initialMainBounds, previewWin.getBounds());
-  }
   const previewWinId = previewWin.id;
   const previewWcId = previewWin.webContents.id;
+  markdownPreviewManager.add(previewWinId, ownerId, tabId, rawData);
+  previewWin.setMenu(buildMarkdownPreviewMenu(previewWin));
+  if (initialMainBounds && placement?.dock) {
+    markdownPreviewManager.dockToMain(previewWinId, initialMainBounds, previewWin.getBounds());
+  }
+  closePreviewsWhenOwnerDestroyed(owner);
 
   // Magnetic / sticky behavior when the user moves the preview window:
   // - If brought near the right edge of the main window, it sticks (docks) so
   //   subsequent main-window moves carry the preview along.
   // - If dragged away, it detaches and moves independently without affecting the main window.
+  let previewSnapTimer: ReturnType<typeof setTimeout> | null = null;
   previewWin.on('move', () => {
     if (isProgrammaticPreviewMove) return;
     if (!mainWindow || mainWindow.isDestroyed() || previewWin.isDestroyed()) return;
     const { docked, snapPosition } = markdownPreviewManager.onPreviewMoved(
+      previewWinId,
       mainWindow.getBounds(),
       previewWin.getBounds(),
     );
@@ -1450,10 +1465,7 @@ ipcMain.handle('markdown:openPreview', async (_event, rawData: unknown) => {
   });
 
   previewWin.on('close', () => {
-    if (markdownPreviewManager.isPreviewWindow(previewWinId)) {
-      markdownPreviewManager.clear();
-      broadcastMarkdownPreviewVisibility(false);
-    }
+    forgetMarkdownPreviewWindow(previewWinId);
   });
 
   previewWin.on('closed', () => {
@@ -1461,18 +1473,17 @@ ipcMain.handle('markdown:openPreview', async (_event, rawData: unknown) => {
       clearTimeout(previewSnapTimer);
       previewSnapTimer = null;
     }
-    markdownPreviewManager.clear();
-    broadcastMarkdownPreviewVisibility(false);
+    forgetMarkdownPreviewWindow(previewWinId);
     clearZoomState(previewWcId);
   });
 
-  broadcastMarkdownPreviewVisibility(true);
+  broadcastMarkdownPreviewVisibility(ownerId);
 
-  previewWin.webContents.on('before-input-event', (event, input) => {
+  previewWin.webContents.on('before-input-event', (inputEvent, input) => {
     const ctrl = input.control || input.meta;
     if (!ctrl || input.type !== 'keyDown') return;
     if (input.key === '+') {
-      event.preventDefault();
+      inputEvent.preventDefault();
       adjustZoom(previewWin.webContents, ZOOM_STEP);
     }
   });
@@ -1489,23 +1500,34 @@ ipcMain.handle('markdown:openPreview', async (_event, rawData: unknown) => {
   return true;
 });
 
-ipcMain.handle('markdown:updatePreview', (_event, rawData: unknown) => {
-  if (markdownPreviewManager.getWindowId() === null) return;
-  const data = markdownPreviewManager.setData(rawData);
-  sendUpdateToMarkdownPreviewWindow(data);
+/** Live update for the sender's tab preview (`rawData.tabId`); ignored when that tab has no preview. */
+ipcMain.handle('markdown:updatePreview', (event, rawData: unknown) => {
+  const result = markdownPreviewManager.updateData(
+    event.sender.id,
+    normalizePreviewTabId(rawData),
+    rawData,
+  );
+  if (result) sendUpdateToMarkdownPreviewWindow(result.windowId, result.data);
 });
 
-ipcMain.handle('markdown:getPreviewData', () => {
-  return markdownPreviewManager.getData();
+/** Closes the preview of the sender's tab `tabId` (e.g. when that tab is closed). */
+ipcMain.handle('markdown:closePreview', (event, tabId: unknown) => {
+  const winId = markdownPreviewManager.findWindowId(event.sender.id, normalizePreviewTabId({ tabId }));
+  if (winId === null) return;
+  forgetMarkdownPreviewWindow(winId);
+  BrowserWindow.fromId(winId)?.close();
 });
 
-ipcMain.handle('markdown:isPreviewOpen', () => {
-  const winId = markdownPreviewManager.getWindowId();
-  if (winId === null) return false;
-  const win = BrowserWindow.fromId(winId);
-  return !!win && !win.isDestroyed();
+/** Called by a preview window on mount to fetch its own payload. */
+ipcMain.handle('markdown:getPreviewData', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return win ? markdownPreviewManager.getData(win.id) : null;
 });
 
+/** Tab ids of the sender editor window that currently have a preview open. */
+ipcMain.handle('markdown:getOpenPreviewTabIds', (event) => {
+  return markdownPreviewManager.getOpenTabIds(event.sender.id);
+});
 /**
  * Refreshes the menus that show `win`'s Always on Top state: the pop-out's own
  * menu (Windows/Linux) and the application menu checkbox (see appMenuAlwaysOnTopWindow).

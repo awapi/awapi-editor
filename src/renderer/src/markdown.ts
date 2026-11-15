@@ -4,7 +4,8 @@
  *
  * Supports:
  * - ATX headings (# .. ######) and Setext headings (=== / ---)
- * - Fenced code blocks (``` or ~~~) with optional language label
+ * - Fenced code blocks (``` or ~~~) with optional language label; ```mermaid blocks are
+ *   wrapped in `[data-mermaid-block]` so the preview can render them as diagrams
  * - Indented code blocks (4 spaces / 1 tab)
  * - Blockquotes (>), including nested blockquotes
  * - Unordered lists (-, *, +), ordered lists (1.), and GFM task lists (- [ ] / - [x])
@@ -493,7 +494,14 @@ export function renderMarkdownToHtml(markdown: string, options?: RenderMarkdownO
       if (i < lines.length) i++; // consume closing fence
       const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : '';
       const langBadge = lang ? ` data-language="${escapeHtml(lang)}"` : '';
-      blocks.push(`<pre${langBadge}><code${langClass}>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+      const codeBlock = `<pre${langBadge}><code${langClass}>${escapeHtml(codeLines.join('\n'))}</code></pre>`;
+      // Mermaid diagrams keep their escaped source as a fallback; the preview window
+      // renders them in an isolated sandbox (see mermaidRenderer.ts).
+      blocks.push(
+        lang.toLowerCase() === 'mermaid'
+          ? `<div class="awapi-mermaid" data-mermaid-block="">${codeBlock}</div>`
+          : codeBlock,
+      );
       continue;
     }
 

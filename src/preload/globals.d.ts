@@ -7,6 +7,7 @@ import type {
   TerminalChoices,
   TerminalPreference,
 } from '../shared/terminal';
+import type { DiagramOpenRequest, DiagramRef, DiagramSyncRequest, DiagramWindowData } from '../shared/diagram';
 
 export type { EncodingKind };
 
@@ -272,6 +273,19 @@ declare global {
       /** Opens a file linked from a preview in the main editor window; resolves false if it is not a readable file. */
       openPreviewLinkInEditor: (filePath: string) => Promise<boolean>;
       onMarkdownPreviewVisibilityChanged: (callback: (openTabIds: string[]) => void) => void;
+
+      /** Preview only: opens or focuses the pop-out window for one rendered Mermaid diagram. */
+      openDiagramPopout: (request: DiagramOpenRequest) => Promise<boolean>;
+      /** Preview only: pushes re-rendered diagrams to open pop-outs and closes ones whose diagram is gone. */
+      syncDiagramPopouts: (request: DiagramSyncRequest) => Promise<void>;
+      /** Preview only: diagrams that currently have a pop-out open. */
+      getOpenDiagramPopouts: () => Promise<DiagramRef[]>;
+      /** Preview only: notified when its open diagram pop-outs change. Returns an unsubscribe function. */
+      onDiagramPopoutsChanged: (callback: (refs: DiagramRef[]) => void) => () => void;
+      /** Diagram pop-out only: fetches the diagram to display. */
+      getDiagramPopoutData: () => Promise<DiagramWindowData | null>;
+      /** Diagram pop-out only: live diagram updates. Returns an unsubscribe function. */
+      onDiagramPopoutUpdate: (callback: (data: DiagramWindowData) => void) => () => void;
 
       removeListeners: () => void;
     };

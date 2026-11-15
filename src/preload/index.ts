@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EncodingKind } from '../shared/encodings';
 import type { PtyCreateOptions, PtyCreateResult, PtyDataEvent, PtyExitEvent, TerminalChoices } from '../shared/terminal';
+import type { DiagramOpenRequest, DiagramRef, DiagramSyncRequest, DiagramWindowData } from '../shared/diagram';
 
 /** Payload describing one editor tab rendered in a Markdown / HTML preview window. */
 interface MarkdownPreviewPayload {
@@ -211,6 +212,34 @@ export const electronAPI = {
     ipcRenderer.invoke('markdown:openFileInEditor', filePath) as Promise<boolean>,
   onMarkdownPreviewVisibilityChanged: (callback: (openTabIds: string[]) => void) =>
     ipcRenderer.on('markdown:previewVisibilityChanged', (_, openTabIds: string[]) => callback(openTabIds)),
+
+  // Mermaid diagram pop-outs (opened from and owned by a Markdown preview window)
+  /** Preview only: opens or focuses the pop-out for one rendered diagram. */
+  openDiagramPopout: (request: DiagramOpenRequest) =>
+    ipcRenderer.invoke('diagram:open', request) as Promise<boolean>,
+  /** Preview only: pushes re-rendered diagrams to open pop-outs and closes stale ones. */
+  syncDiagramPopouts: (request: DiagramSyncRequest) =>
+    ipcRenderer.invoke('diagram:sync', request) as Promise<void>,
+  /** Preview only: diagrams that currently have a pop-out open. */
+  getOpenDiagramPopouts: () => ipcRenderer.invoke('diagram:getOpenPopouts') as Promise<DiagramRef[]>,
+  /** Preview only: notified when its set of open diagram pop-outs changes. Returns an unsubscribe function. */
+  onDiagramPopoutsChanged: (callback: (refs: DiagramRef[]) => void) => {
+    const listener = (_: unknown, refs: DiagramRef[]) => callback(refs);
+    ipcRenderer.on('diagram:popoutsChanged', listener);
+    return () => {
+      ipcRenderer.removeListener('diagram:popoutsChanged', listener);
+    };
+  },
+  /** Diagram pop-out only: fetches the diagram to display. */
+  getDiagramPopoutData: () => ipcRenderer.invoke('diagram:getData') as Promise<DiagramWindowData | null>,
+  /** Diagram pop-out only: live diagram updates. Returns an unsubscribe function. */
+  onDiagramPopoutUpdate: (callback: (data: DiagramWindowData) => void) => {
+    const listener = (_: unknown, data: DiagramWindowData) => callback(data);
+    ipcRenderer.on('diagram:update', listener);
+    return () => {
+      ipcRenderer.removeListener('diagram:update', listener);
+    };
+  },
   // Cleanup listeners
   removeListeners: () => {
     ipcRenderer.removeAllListeners('menu:new');

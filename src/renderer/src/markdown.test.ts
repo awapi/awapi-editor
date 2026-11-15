@@ -251,6 +251,18 @@ describe('renderMarkdownToHtml', () => {
     expect(html).toContain('<pre data-language="ts"><code class="language-ts">const el = &quot;&lt;div onclick=alert(1)&gt;&quot;;</code></pre>');
   });
 
+  it('wraps mermaid fences in a diagram block while keeping the source escaped', () => {
+    const md = ['```Mermaid', 'graph TD; A["<img src=x onerror=alert(1)>"]-->B', '```'].join('\n');
+    const html = renderMarkdownToHtml(md);
+    expect(html).toBe(
+      '<div class="awapi-mermaid" data-mermaid-block="">' +
+        '<pre data-language="Mermaid"><code class="language-Mermaid">' +
+        'graph TD; A[&quot;&lt;img src=x onerror=alert(1)&gt;&quot;]--&gt;B' +
+        '</code></pre></div>',
+    );
+    expect(renderMarkdownToHtml('```js\nx\n```')).not.toContain('data-mermaid-block');
+  });
+
   it('renders unordered, ordered, and GFM task lists', () => {
     const md = [
       '- First item',

@@ -38,6 +38,13 @@ import {
   normalizePreviewTabId,
   type MarkdownPreviewData,
 } from './markdownPreviewManager';
+import { createDiagramWindowManager } from './diagramWindowManager';
+import {
+  formatDiagramWindowTitle,
+  normalizeDiagramOpenRequest,
+  normalizeDiagramSyncRequest,
+  type DiagramWindowData,
+} from '../shared/diagram';
 import {
   listDirectoryEntries,
   deleteExplorerPath,
@@ -1546,6 +1553,140 @@ ipcMain.handle('markdown:openFileInEditor', (_event, filePath: unknown) => {
     mainWindow.focus();
   }
   return true;
+});
+
+// ── Mermaid diagram pop-out windows ───────────────────────────────────────────
+// Opened from a Markdown preview window, which owns them: they receive only the
+// SVG the preview already rendered in its Mermaid sandbox and display it as an
+// inert <img>. They close with their preview, or when their diagram disappears.
+const diagramWindowManager = createDiagramWindowManager();
+const diagramOwnersWithCleanup = new Set<number>();
+
+/** Diagram IPC is only accepted from Markdown preview windows. */
+function isPreviewWindowSender(sender: Electron.WebContents): boolean {
+  const win = BrowserWindow.fromWebContents(sender);
+  return !!win && markdownPreviewManager.isPreviewWindow(win.id);
+}
+
+function broadcastDiagramPopouts(ownerId: number): void {
+  const owner = webContents.fromId(ownerId);
+  if (!owner || owner.isDestroyed()) return;
+  owner.send('diagram:popoutsChanged', diagramWindowManager.getOpenRefs(ownerId));
+}
+
+function sendDiagramUpdate(windowId: number, data: DiagramWindowData): void {
+  const win = BrowserWindow.fromId(windowId);
+  if (!win || win.isDestroyed()) return;
+  win.setTitle(data.title);
+  const wc = win.webContents;
+  if (!wc.isDestroyed() && !wc.isLoading()) wc.send('diagram:update', data);
+}
+
+function closeDiagramWindowsWhenOwnerDestroyed(owner: Electron.WebContents): void {
+  if (diagramOwnersWithCleanup.has(owner.id)) return;
+  diagramOwnersWithCleanup.add(owner.id);
+  const ownerId = owner.id;
+  owner.once('destroyed', () => {
+    diagramOwnersWithCleanup.delete(ownerId);
+    for (const winId of diagramWindowManager.getWindowIdsForOwner(ownerId)) {
+      diagramWindowManager.remove(winId);
+      BrowserWindow.fromId(winId)?.close();
+    }
+  });
+}
+
+function buildDiagramWindowMenu(win: BrowserWindow): Electron.Menu {
+  return Menu.buildFromTemplate([
+    {
+      label: 'File',
+      submenu: [{ label: 'Close Diagram', accelerator: 'CmdOrCtrl+W', click: () => win.close() }],
+    },
+    {
+      label: 'View',
+      submenu: [{ role: 'togglefullscreen' as const }],
+    },
+  ]);
+}
+
+/** Opens (or focuses and refreshes) the pop-out for one diagram of the sender preview. */
+ipcMain.handle('diagram:open', async (event, raw: unknown) => {
+  const owner = event.sender;
+  if (!isPreviewWindowSender(owner)) return false;
+  const request = normalizeDiagramOpenRequest(raw);
+  if (!request) return false;
+
+  const existingId = diagramWindowManager.findWindowId(owner.id, request.docKey, request.index);
+  const existingWin = existingId !== null ? BrowserWindow.fromId(existingId) : null;
+  if (existingId !== null && existingWin && !existingWin.isDestroyed()) {
+    const data = diagramWindowManager.replace(existingId, request);
+    if (data) sendDiagramUpdate(existingId, data);
+    if (existingWin.isMinimized()) existingWin.restore();
+    existingWin.show();
+    existingWin.focus();
+    return true;
+  }
+  if (existingId !== null) diagramWindowManager.remove(existingId);
+
+  const ownerWin = BrowserWindow.fromWebContents(owner);
+  const ownerBounds = ownerWin && !ownerWin.isDestroyed() ? ownerWin.getBounds() : null;
+  const diagramWin = new BrowserWindow({
+    width: 1000,
+    height: 750,
+    ...(ownerBounds ? getCascadedPosition(ownerBounds) : {}),
+    title: formatDiagramWindowTitle(request.title, request.index),
+    icon: join(__dirname, '../../build/icon.png'),
+    backgroundColor: request.theme === 'light' ? '#ffffff' : '#1e1e1e',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  const diagramWinId = diagramWin.id;
+  diagramWindowManager.add(diagramWinId, owner.id, request);
+  diagramWin.setMenu(buildDiagramWindowMenu(diagramWin));
+  closeDiagramWindowsWhenOwnerDestroyed(owner);
+
+  // The pop-out only displays an image; it never opens windows or navigates.
+  diagramWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  diagramWin.webContents.on('will-navigate', navEvent => navEvent.preventDefault());
+
+  const ownerId = owner.id;
+  diagramWin.on('closed', () => {
+    if (diagramWindowManager.remove(diagramWinId)) broadcastDiagramPopouts(ownerId);
+  });
+  broadcastDiagramPopouts(ownerId);
+
+  if (isDev) {
+    await diagramWin.loadURL(
+      (process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173') + '#mermaid-diagram',
+    );
+  } else {
+    await diagramWin.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'mermaid-diagram' });
+  }
+  return true;
+});
+
+/** Live updates from a preview window for the diagram pop-outs it owns. */
+ipcMain.handle('diagram:sync', (event, raw: unknown) => {
+  if (!isPreviewWindowSender(event.sender)) return;
+  const request = normalizeDiagramSyncRequest(raw);
+  if (!request) return;
+  const { updates, close } = diagramWindowManager.applySync(event.sender.id, request);
+  for (const { windowId, data } of updates) sendDiagramUpdate(windowId, data);
+  for (const windowId of close) BrowserWindow.fromId(windowId)?.close();
+  if (close.length > 0) broadcastDiagramPopouts(event.sender.id);
+});
+
+/** Called by a diagram pop-out on mount to fetch what it should display. */
+ipcMain.handle('diagram:getData', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return win ? diagramWindowManager.getData(win.id) : null;
+});
+
+/** Diagrams of the sender preview window that currently have a pop-out open. */
+ipcMain.handle('diagram:getOpenPopouts', (event) => {
+  return isPreviewWindowSender(event.sender) ? diagramWindowManager.getOpenRefs(event.sender.id) : [];
 });
 /**
  * Refreshes the menus that show `win`'s Always on Top state: the pop-out's own

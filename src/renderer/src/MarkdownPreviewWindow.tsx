@@ -9,6 +9,16 @@ import {
   renderMarkdownToHtml,
   resolvePreviewLink,
 } from './markdown';
+import {
+  applyMermaidResult,
+  getCachedMermaidResult,
+  getMermaidBlockSource,
+  renderMermaidDiagram,
+  type MermaidBlockHandle,
+  type MermaidRenderResult,
+} from './mermaidRenderer';
+import type { PanZoomState } from './panZoom';
+import type { DiagramRef } from '../../shared/diagram';
 
 export interface MarkdownPreviewPayload {
   title: string;
@@ -41,6 +51,12 @@ const MarkdownPreviewWindow: React.FC = () => {
   const [alwaysOnTop, setAlwaysOnTop] = useState<boolean>(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  // Last result shown per diagram position, kept on screen while an edited diagram re-renders.
+  const lastMermaidResults = useRef<Array<MermaidRenderResult | undefined>>([]);
+  // User-adjusted zoom/pan per diagram position, restored after live re-renders.
+  const inlineDiagramViews = useRef<Array<PanZoomState | null | undefined>>([]);
+  const openDiagramPopouts = useRef<DiagramRef[]>([]);
   // Scroll offset of each history level (0 = live tab) so Back restores position.
   const scrollPositions = useRef<number[]>([]);
   const pendingScroll = useRef<{ top: number; fragment?: string | null } | null>(null);
@@ -127,6 +143,118 @@ const MarkdownPreviewWindow: React.FC = () => {
           : renderMarkdownToHtml(payload.content, { baseFilePath: payload.filePath }),
     [isUnsupported, isHtml, payload.content, payload.filePath],
   );
+
+  // Diagram pop-outs are tied to the document being shown and the diagram's position in it.
+  const diagramDocKey = payload.filePath ?? `untitled:${payload.title}`;
+  const diagramContext = useRef({ docKey: diagramDocKey, title: payload.title, theme: effectiveMode });
+  diagramContext.current = { docKey: diagramDocKey, title: payload.title, theme: effectiveMode };
+
+  useEffect(() => {
+    const api = (window as any).electronAPI;
+    let isMounted = true;
+    Promise.resolve(api?.getOpenDiagramPopouts?.())
+      .then((refs: DiagramRef[] | undefined) => {
+        if (isMounted && Array.isArray(refs)) openDiagramPopouts.current = refs;
+      })
+      .catch(() => {});
+    const unsubscribe = api?.onDiagramPopoutsChanged?.((refs: DiagramRef[]) => {
+      openDiagramPopouts.current = Array.isArray(refs) ? refs : [];
+    });
+    return () => {
+      isMounted = false;
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
+
+  /** Pushes re-rendered diagrams to open pop-outs; the main process closes ones whose diagram is gone. */
+  const syncDiagramPopouts = useCallback(
+    (count: number, results: Array<{ index: number; result: MermaidRenderResult }>, onlyIfRelevant = false) => {
+      const refs = openDiagramPopouts.current;
+      if (refs.length === 0) return;
+      const { docKey, theme } = diagramContext.current;
+      const relevant = new Set(refs.filter(r => r.docKey === docKey).map(r => r.index));
+      const updates = results
+        .filter(({ index, result }) => relevant.has(index) && (result.ok || !result.retryable))
+        .map(({ index, result }) =>
+          result.ok
+            ? { index, svg: result.svg, error: null }
+            : { index, svg: null, error: result.error },
+        );
+      if (onlyIfRelevant && updates.length === 0) return;
+      void (window as any).electronAPI?.syncDiagramPopouts?.({ docKey, count, theme, updates });
+    },
+    [],
+  );
+
+  const openDiagramPopout = useCallback((index: number) => {
+    const result = lastMermaidResults.current[index];
+    if (!result?.ok) return;
+    const { docKey, title, theme } = diagramContext.current;
+    void (window as any).electronAPI?.openDiagramPopout?.({
+      docKey,
+      index,
+      title,
+      theme,
+      svg: result.svg,
+      error: null,
+    });
+  }, []);
+
+  // Replace ```mermaid blocks with diagrams rendered in an isolated sandbox. Runs as a
+  // layout effect so cached diagrams are swapped in before paint (no flash of source).
+  useLayoutEffect(() => {
+    const container = contentRef.current;
+    const blocks = container
+      ? Array.from(container.querySelectorAll<HTMLElement>('[data-mermaid-block]'))
+      : [];
+    lastMermaidResults.current.length = blocks.length;
+    inlineDiagramViews.current.length = blocks.length;
+
+    let cancelled = false;
+    const handles: MermaidBlockHandle[] = [];
+    const show = (block: HTMLElement, index: number, result: MermaidRenderResult | null) => {
+      handles.push(
+        applyMermaidResult(
+          block,
+          result,
+          result?.ok
+            ? {
+                onPopout: () => openDiagramPopout(index),
+                initialView: inlineDiagramViews.current[index] ?? null,
+                onViewChange: view => {
+                  inlineDiagramViews.current[index] = view;
+                },
+              }
+            : {},
+        ),
+      );
+    };
+
+    const ready: Array<{ index: number; result: MermaidRenderResult }> = [];
+    blocks.forEach((block, index) => {
+      const source = getMermaidBlockSource(block);
+      const cached = getCachedMermaidResult(source, effectiveMode);
+      if (cached) {
+        lastMermaidResults.current[index] = cached;
+        show(block, index, cached);
+        ready.push({ index, result: cached });
+        return;
+      }
+      show(block, index, lastMermaidResults.current[index] ?? null);
+      void renderMermaidDiagram(source, effectiveMode).then(result => {
+        if (cancelled || !block.isConnected) return;
+        lastMermaidResults.current[index] = result;
+        show(block, index, result);
+        syncDiagramPopouts(blocks.length, [{ index, result }], true);
+      });
+    });
+    syncDiagramPopouts(blocks.length, ready);
+
+    return () => {
+      cancelled = true;
+      handles.forEach(handle => handle.destroy());
+    };
+  }, [renderedHtml, effectiveMode, diagramDocKey, openDiagramPopout, syncDiagramPopouts]);
 
   const scrollToFragment = useCallback((id: string) => {
     const el =
@@ -390,6 +518,66 @@ const MarkdownPreviewWindow: React.FC = () => {
       max-width: 100%;
       height: auto;
       border-radius: 4px;
+    }
+    .awapi-md-preview .awapi-mermaid {
+      margin: 16px 0;
+    }
+    .awapi-md-preview .awapi-mermaid-output {
+      position: relative;
+      text-align: center;
+    }
+    .awapi-md-preview .awapi-mermaid-viewport {
+      position: relative;
+      overflow: hidden;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+    }
+    .awapi-md-preview .awapi-mermaid-viewport.is-panning {
+      cursor: grabbing;
+    }
+    .awapi-md-preview .awapi-mermaid-output img {
+      border-radius: 0;
+    }
+    .awapi-md-preview .awapi-mermaid-toolbar {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      display: flex;
+      gap: 4px;
+      padding: 3px;
+      border-radius: 6px;
+      border: 1px solid ${borderColor};
+      background-color: ${codeBg};
+      opacity: 0;
+      transition: opacity 0.12s ease-in-out;
+    }
+    .awapi-md-preview .awapi-mermaid-output:hover .awapi-mermaid-toolbar,
+    .awapi-md-preview .awapi-mermaid-toolbar:focus-within {
+      opacity: 1;
+    }
+    .awapi-md-preview .awapi-mermaid-tool {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border: none;
+      border-radius: 4px;
+      background: transparent;
+      color: ${pageFg};
+      cursor: pointer;
+    }
+    .awapi-md-preview .awapi-mermaid-tool:hover {
+      background-color: ${borderColor};
+    }
+    .awapi-md-preview .awapi-mermaid-output[role='alert'] {
+      text-align: left;
+      margin-top: 8px;
+      font-size: 13px;
+      color: ${isLight ? '#9a3412' : '#f0a070'};
+      white-space: pre-wrap;
     }
   `;
 
@@ -665,6 +853,7 @@ const MarkdownPreviewWindow: React.FC = () => {
           />
         ) : (
           <div
+            ref={contentRef}
             data-testid="markdown-preview-content"
             className="awapi-md-preview"
             onClick={handleContentClick}

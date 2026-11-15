@@ -3,6 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import MarkdownPreviewWindow, { type MarkdownPreviewPayload } from './MarkdownPreviewWindow';
 import { ThemeProvider } from './theme/ThemeContext';
+import { renderMermaidDiagram } from './mermaidRenderer';
+
+vi.mock('./mermaidRenderer', async importOriginal => ({
+  ...(await importOriginal<typeof import('./mermaidRenderer')>()),
+  renderMermaidDiagram: vi.fn(),
+  getCachedMermaidResult: vi.fn(() => undefined),
+}));
 
 describe('MarkdownPreviewWindow', () => {
   let updateCallback: ((payload: MarkdownPreviewPayload) => void) | undefined;
@@ -87,6 +94,100 @@ describe('MarkdownPreviewWindow', () => {
     );
 
     await waitFor(() => expect(screen.getByTestId('markdown-preview-empty')).toBeDefined());
+  });
+
+  it('renders mermaid blocks as sandbox-produced images and shows diagram errors', async () => {
+    vi.mocked(renderMermaidDiagram).mockImplementation(async code =>
+      code.includes('bad')
+        ? { ok: false, error: 'Parse error on line 1' }
+        : { ok: true, svg: '<svg xmlns="http://www.w3.org/2000/svg"/>' },
+    );
+    api.getMarkdownPreviewData.mockResolvedValueOnce({
+      title: 'diagram.md',
+      filePath: '/project/diagram.md',
+      content: '```mermaid\ngraph TD; A-->B\n```\n\n```mermaid\nbad syntax\n```',
+      theme: 'light',
+    });
+
+    render(
+      <ThemeProvider>
+        <MarkdownPreviewWindow />
+      </ThemeProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('markdown-preview-content').querySelector('img')).not.toBeNull(),
+    );
+    expect(renderMermaidDiagram).toHaveBeenCalledWith('graph TD; A-->B', 'light');
+    const [ok, failed] = Array.from(
+      screen.getByTestId('markdown-preview-content').querySelectorAll<HTMLElement>('[data-mermaid-block]'),
+    );
+    expect(ok.querySelector('img')!.getAttribute('src')).toMatch(/^data:image\/svg\+xml/);
+    expect(ok.querySelector('pre')!.hidden).toBe(true);
+    await waitFor(() => expect(failed.getAttribute('data-mermaid-state')).toBe('error'));
+    expect(failed.textContent).toContain('Mermaid error: Parse error on line 1');
+    expect(failed.querySelector('pre')!.hidden).toBe(false);
+  });
+
+  it('pops out a diagram and keeps open pop-outs in sync with edits', async () => {
+    vi.mocked(renderMermaidDiagram).mockImplementation(async code => ({
+      ok: true,
+      svg: `<svg data-src="${code}"/>`,
+    }));
+    let popoutsChanged: ((refs: Array<{ docKey: string; index: number }>) => void) | undefined;
+    api.getOpenDiagramPopouts = vi.fn().mockResolvedValue([]);
+    api.onDiagramPopoutsChanged = vi.fn(cb => {
+      popoutsChanged = cb;
+      return () => {};
+    });
+    api.openDiagramPopout = vi.fn().mockResolvedValue(true);
+    api.syncDiagramPopouts = vi.fn().mockResolvedValue(undefined);
+    const doc = (content: string) => ({
+      title: 'diagram.md',
+      filePath: '/project/diagram.md',
+      content,
+      theme: 'dark' as const,
+    });
+    api.getMarkdownPreviewData.mockResolvedValueOnce(doc('```mermaid\ngraph TD; A-->B\n```'));
+
+    render(
+      <ThemeProvider>
+        <MarkdownPreviewWindow />
+      </ThemeProvider>,
+    );
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-mermaid-action="popout"]')).not.toBeNull(),
+    );
+    fireEvent.click(document.querySelector('[data-mermaid-action="popout"]')!);
+    expect(api.openDiagramPopout).toHaveBeenCalledWith({
+      docKey: '/project/diagram.md',
+      index: 0,
+      title: 'diagram.md',
+      theme: 'dark',
+      svg: '<svg data-src="graph TD; A-->B"/>',
+      error: null,
+    });
+    expect(api.syncDiagramPopouts).not.toHaveBeenCalled();
+
+    act(() => popoutsChanged!([{ docKey: '/project/diagram.md', index: 0 }]));
+    act(() => updateCallback!(doc('```mermaid\ngraph TD; A-->C\n```')));
+    await waitFor(() =>
+      expect(api.syncDiagramPopouts).toHaveBeenCalledWith({
+        docKey: '/project/diagram.md',
+        count: 1,
+        theme: 'dark',
+        updates: [{ index: 0, svg: '<svg data-src="graph TD; A-->C"/>', error: null }],
+      }),
+    );
+
+    act(() => updateCallback!(doc('No diagrams any more.')));
+    expect(api.syncDiagramPopouts).toHaveBeenLastCalledWith({
+      docKey: '/project/diagram.md',
+      count: 0,
+      theme: 'dark',
+      updates: [],
+    });
   });
 
   it('toggles Always on Top when the pin button is clicked', async () => {

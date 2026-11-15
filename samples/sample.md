@@ -96,6 +96,17 @@ LIMIT 10;
 
 ---
 
+## Mermaid Diagrams
+
+```mermaid
+flowchart LR
+  Edit[Edit Markdown] --> Preview[Live Preview]
+  Preview -->|mermaid fence| Sandbox[Sandboxed renderer]
+  Sandbox --> Diagram[Inert SVG image]
+```
+
+---
+
 ## Links
 
 - Project Repository: <https://github.com/awapi/awapi-editor>

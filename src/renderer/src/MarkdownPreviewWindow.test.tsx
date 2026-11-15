@@ -368,4 +368,164 @@ describe('MarkdownPreviewWindow', () => {
       expect(screen.getByTestId('html-preview-iframe').getAttribute('srcdoc')).toContain('About</body>');
     });
   });
+
+  describe('find in preview', () => {
+    const renderPreview = async (payload: MarkdownPreviewPayload) => {
+      api.getMarkdownPreviewData = vi.fn().mockResolvedValue(payload);
+      render(
+        <ThemeProvider>
+          <MarkdownPreviewWindow />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('markdown-preview-title').textContent).toBe(payload.title));
+    };
+    const markdown: MarkdownPreviewPayload = {
+      title: 'notes.md',
+      filePath: '/notes.md',
+      content: '# Apple notes\n\nAn apple a day.\n\n- green **apple**',
+    };
+    const marks = () =>
+      Array.from(screen.getByTestId('markdown-preview-content').querySelectorAll('mark.awapi-find-match'));
+    const activeText = () =>
+      screen.getByTestId('markdown-preview-content').querySelector('mark.awapi-find-active')?.textContent;
+
+    it('opens with Ctrl+F, highlights matches, and steps through them', async () => {
+      await renderPreview(markdown);
+      expect(screen.queryByTestId('preview-find-bar')).toBeNull();
+
+      fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+      const input = screen.getByTestId('preview-find-input');
+      expect(document.activeElement).toBe(input);
+
+      fireEvent.change(input, { target: { value: 'apple' } });
+      expect(marks()).toHaveLength(3);
+      expect(screen.getByTestId('preview-find-count').textContent).toBe('1 of 3');
+      expect(activeText()).toBe('Apple');
+
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(screen.getByTestId('preview-find-count').textContent).toBe('2 of 3');
+      expect(activeText()).toBe('apple');
+
+      fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+      fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+      expect(screen.getByTestId('preview-find-count').textContent).toBe('3 of 3');
+
+      fireEvent.click(screen.getByTestId('preview-find-option-matchCase'));
+      expect(marks()).toHaveLength(2);
+      expect(screen.getByTestId('preview-find-count').textContent).toBe('1 of 2');
+      expect(activeText()).toBe('apple');
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByTestId('preview-find-bar')).toBeNull();
+      expect(marks()).toHaveLength(0);
+    });
+
+    it('lists every match in the Find All popup and jumps to a clicked one', async () => {
+      await renderPreview(markdown);
+      fireEvent.click(screen.getByTestId('markdown-preview-find-toggle'));
+      fireEvent.change(screen.getByTestId('preview-find-input'), { target: { value: 'apple' } });
+
+      fireEvent.click(screen.getByTestId('preview-find-all'));
+      const items = screen.getAllByTestId('preview-find-all-item');
+      expect(items).toHaveLength(3);
+      expect(screen.getByTestId('preview-find-all-summary').textContent).toBe('3 matches for "apple"');
+      expect(items[1].textContent).toContain('An apple a day.');
+
+      fireEvent.click(items[2]);
+      expect(screen.getByTestId('preview-find-count').textContent).toBe('3 of 3');
+      expect(items[2].getAttribute('aria-selected')).toBe('true');
+
+      // Escape closes the popup first, then the find bar.
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryByTestId('preview-find-all-popup')).toBeNull();
+      expect(screen.getByTestId('preview-find-bar')).toBeTruthy();
+    });
+
+    it('re-applies highlights when the live content changes', async () => {
+      await renderPreview(markdown);
+      fireEvent.keyDown(window, { key: 'f', metaKey: true });
+      fireEvent.change(screen.getByTestId('preview-find-input'), { target: { value: 'apple' } });
+      expect(marks()).toHaveLength(3);
+
+      act(() => {
+        updateCallback!({ ...markdown, content: 'apple apple' });
+      });
+      expect(marks()).toHaveLength(2);
+      expect(screen.getByTestId('preview-find-count').textContent).toBe('1 of 2');
+    });
+
+    it('opens from the Find menu command and shows regex errors', async () => {
+      let onFind: (() => void) | undefined;
+      api.onFind = vi.fn((cb: () => void) => {
+        onFind = cb;
+        return () => {};
+      });
+      await renderPreview(markdown);
+
+      act(() => onFind!());
+      expect(screen.getByTestId('preview-find-bar')).toBeTruthy();
+
+      fireEvent.click(screen.getByTestId('preview-find-option-regex'));
+      fireEvent.change(screen.getByTestId('preview-find-input'), { target: { value: '(' } });
+      expect(screen.getByTestId('preview-find-count').textContent).toBe('Invalid regex');
+      expect(marks()).toHaveLength(0);
+    });
+
+    it('searches HTML previews through the iframe find agent', async () => {
+      await renderPreview({
+        title: 'index.html',
+        filePath: '/site/index.html',
+        content: '<html><head></head><body>hello hello</body></html>',
+        mode: 'html',
+      });
+      const iframe = screen.getByTestId('html-preview-iframe') as HTMLIFrameElement;
+      expect(iframe.getAttribute('srcdoc')).toContain('data-awapi-preview-find');
+      const post = vi.spyOn(iframe.contentWindow!, 'postMessage');
+
+      fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+      fireEvent.change(screen.getByTestId('preview-find-input'), { target: { value: 'hello' } });
+      const search = post.mock.calls.map(c => c[0] as any).find(m => m.action === 'search' && m.query === 'hello');
+      expect(search).toMatchObject({ type: 'awapi-preview-find', options: { matchCase: false } });
+
+      const reply = (requestId: number) =>
+        act(() => {
+          window.dispatchEvent(
+            new MessageEvent('message', {
+              data: {
+                type: 'awapi-preview-find-result',
+                requestId,
+                result: {
+                  matches: [
+                    { before: '', text: 'hello', after: ' hello' },
+                    { before: 'hello ', text: 'hello', after: '' },
+                  ],
+                  truncated: false,
+                  error: null,
+                },
+              },
+              source: iframe.contentWindow,
+            }),
+          );
+        });
+      reply(search.requestId - 1); // stale replies are ignored
+      expect(screen.getByTestId('preview-find-count').textContent).toBe('No results');
+      reply(search.requestId);
+      expect(screen.getByTestId('preview-find-count').textContent).toBe('1 of 2');
+      expect(post).toHaveBeenCalledWith(
+        { type: 'awapi-preview-find', action: 'activate', index: 0, scroll: true },
+        '*',
+      );
+
+      // Shortcuts pressed inside the iframe are forwarded to the find bar.
+      act(() => {
+        window.dispatchEvent(
+          new MessageEvent('message', {
+            data: { type: 'awapi-preview-find-key', key: 'F3', shiftKey: false, altKey: false, ctrlKey: false, metaKey: false },
+            source: iframe.contentWindow,
+          }),
+        );
+      });
+      expect(screen.getByTestId('preview-find-count').textContent).toBe('2 of 2');
+    });
+  });
 });

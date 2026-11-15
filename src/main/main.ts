@@ -1314,6 +1314,8 @@ function buildMarkdownPreviewMenu(win: Electron.BrowserWindow): Electron.Menu {
       submenu: [
         { role: 'copy' as const },
         { role: 'selectAll' as const },
+        { type: 'separator' as const },
+        { label: 'Find…', accelerator: 'CmdOrCtrl+F', click: () => wc.send('menu:find') },
       ],
     },
     {

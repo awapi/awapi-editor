@@ -19,6 +19,22 @@ import {
 } from './mermaidRenderer';
 import type { PanZoomState } from './panZoom';
 import type { DiagramRef } from '../../shared/diagram';
+import {
+  PREVIEW_FIND_COMMAND_MESSAGE,
+  PREVIEW_FIND_KEY_MESSAGE,
+  PREVIEW_FIND_RESULT_MESSAGE,
+  createPreviewFindEngine,
+  injectHtmlPreviewFindAgent,
+  isPreviewFindShortcut,
+  type PreviewFindCommand,
+  type PreviewFindEngine,
+  type PreviewFindOptions,
+  type PreviewFindResult,
+  type PreviewFindShortcut,
+} from './previewFind';
+import PreviewFindBar from './PreviewFindBar';
+
+const EMPTY_FIND_RESULT: PreviewFindResult = { matches: [], truncated: false, error: null };
 
 export interface MarkdownPreviewPayload {
   title: string;
@@ -137,8 +153,10 @@ const MarkdownPreviewWindow: React.FC = () => {
       isUnsupported
         ? ''
         : isHtml
-          ? injectHtmlPreviewLinkHandler(
-              prepareHtmlForPreview(payload.content, { baseFilePath: payload.filePath }),
+          ? injectHtmlPreviewFindAgent(
+              injectHtmlPreviewLinkHandler(
+                prepareHtmlForPreview(payload.content, { baseFilePath: payload.filePath }),
+              ),
             )
           : renderMarkdownToHtml(payload.content, { baseFilePath: payload.filePath }),
     [isUnsupported, isHtml, payload.content, payload.filePath],
@@ -256,6 +274,152 @@ const MarkdownPreviewWindow: React.FC = () => {
     };
   }, [renderedHtml, effectiveMode, diagramDocKey, openDiagramPopout, syncDiagramPopouts]);
 
+  // ---- Find in preview -------------------------------------------------------
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [findOptions, setFindOptions] = useState<PreviewFindOptions>({
+    matchCase: false,
+    wholeWord: false,
+    regex: false,
+  });
+  const [findResult, setFindResult] = useState<PreviewFindResult>(EMPTY_FIND_RESULT);
+  const [activeMatch, setActiveMatch] = useState(-1);
+  const [showAllMatches, setShowAllMatches] = useState(false);
+  const [findFocusRequest, setFindFocusRequest] = useState(0);
+  const findEngineRef = useRef<PreviewFindEngine | null>(null);
+  const activeMatchRef = useRef(-1);
+  const matchCountRef = useRef(0);
+  const findRequestId = useRef(0);
+  const pendingHtmlFind = useRef<{ requestId: number; reset: boolean; scroll: boolean } | null>(null);
+  const lastFindKey = useRef('');
+
+  const postToHtmlPreview = (command: PreviewFindCommand) => {
+    iframeRef.current?.contentWindow?.postMessage(command, '*');
+  };
+
+  const activateMatch = (index: number, scroll: boolean) => {
+    activeMatchRef.current = index;
+    setActiveMatch(index);
+    if (isHtml) {
+      postToHtmlPreview({ type: PREVIEW_FIND_COMMAND_MESSAGE, action: 'activate', index, scroll });
+    } else {
+      findEngineRef.current?.setActive(index, scroll);
+    }
+  };
+
+  const applyFindResult = (result: PreviewFindResult, reset: boolean, scroll: boolean) => {
+    const count = result.matches.length;
+    const previous = activeMatchRef.current;
+    const index = count === 0 ? -1 : reset || previous < 0 ? 0 : Math.min(previous, count - 1);
+    matchCountRef.current = count;
+    setFindResult(result);
+    activateMatch(index, scroll);
+  };
+
+  /** Re-runs the search; `reset` jumps back to the first match (new query or options). */
+  const runFind = (reset: boolean, scroll: boolean) => {
+    findEngineRef.current ??= createPreviewFindEngine(document);
+    if (!findOpen || !findQuery || isUnsupported) {
+      findEngineRef.current.clear();
+      postToHtmlPreview({ type: PREVIEW_FIND_COMMAND_MESSAGE, action: 'clear' });
+      pendingHtmlFind.current = null;
+      applyFindResult(EMPTY_FIND_RESULT, true, false);
+      return;
+    }
+    if (isHtml) {
+      findEngineRef.current.clear();
+      const requestId = ++findRequestId.current;
+      pendingHtmlFind.current = { requestId, reset, scroll };
+      postToHtmlPreview({
+        type: PREVIEW_FIND_COMMAND_MESSAGE,
+        action: 'search',
+        requestId,
+        query: findQuery,
+        options: findOptions,
+      });
+      return;
+    }
+    const result = findEngineRef.current.search(
+      contentRef.current,
+      findQuery,
+      findOptions,
+      '[data-mermaid-block]',
+    );
+    applyFindResult(result, reset, scroll);
+  };
+  const runFindRef = useRef(runFind);
+  runFindRef.current = runFind;
+  const applyFindResultRef = useRef(applyFindResult);
+  applyFindResultRef.current = applyFindResult;
+
+  // Re-search when the query/options change, and after every Markdown re-render
+  // (HTML previews are re-searched from the iframe's load event instead).
+  useLayoutEffect(() => {
+    const key = JSON.stringify([findOpen, findQuery, findOptions]);
+    const queryChanged = key !== lastFindKey.current;
+    lastFindKey.current = key;
+    if (!queryChanged && isHtml) return;
+    runFindRef.current(queryChanged, queryChanged);
+  }, [findOpen, findQuery, findOptions, renderedHtml, isHtml, isUnsupported]);
+
+  const openFind = () => {
+    const active = document.activeElement;
+    const isFindInput = active instanceof HTMLElement && active.dataset.testid === 'preview-find-input';
+    const selected = isFindInput ? '' : (window.getSelection?.()?.toString() ?? '');
+    if (selected && selected.length <= 200 && !/[\r\n]/.test(selected)) setFindQuery(selected);
+    setFindOpen(true);
+    setFindFocusRequest(n => n + 1);
+  };
+
+  const closeFind = () => {
+    setFindOpen(false);
+    setShowAllMatches(false);
+  };
+
+  const stepMatch = (delta: number) => {
+    const count = matchCountRef.current;
+    if (count === 0) return;
+    const current = activeMatchRef.current < 0 ? (delta > 0 ? -1 : 0) : activeMatchRef.current;
+    activateMatch((((current + delta) % count) + count) % count, true);
+  };
+
+  /** Handles find shortcuts from this window or forwarded by the HTML iframe; returns true when consumed. */
+  const handleFindShortcut = (e: PreviewFindShortcut): boolean => {
+    const mod = e.ctrlKey || e.metaKey;
+    const key = e.key.toLowerCase();
+    if (mod && !e.altKey && key === 'f') {
+      openFind();
+      return true;
+    }
+    if ((mod && !e.altKey && key === 'g') || e.key === 'F3') {
+      if (!findOpen) openFind();
+      else stepMatch(e.shiftKey ? -1 : 1);
+      return true;
+    }
+    if (e.key === 'Escape' && findOpen) {
+      if (showAllMatches) setShowAllMatches(false);
+      else closeFind();
+      return true;
+    }
+    return false;
+  };
+  const handleFindShortcutRef = useRef(handleFindShortcut);
+  handleFindShortcutRef.current = handleFindShortcut;
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isPreviewFindShortcut(e) && handleFindShortcutRef.current(e)) e.preventDefault();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    const unsubscribe = (window as any).electronAPI?.onFind?.(() =>
+      handleFindShortcutRef.current({ key: 'f', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false }),
+    );
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
+
   const scrollToFragment = useCallback((id: string) => {
     const el =
       document.getElementById(id) ??
@@ -344,6 +508,26 @@ const MarkdownPreviewWindow: React.FC = () => {
       const frameWindow = iframeRef.current?.contentWindow;
       if (!frameWindow || event.source !== frameWindow) return;
       const data = event.data as { type?: unknown; href?: unknown } | null;
+      if (data?.type === PREVIEW_FIND_RESULT_MESSAGE) {
+        const { requestId, result } = data as { requestId?: unknown; result?: PreviewFindResult };
+        const pending = pendingHtmlFind.current;
+        if (!pending || pending.requestId !== requestId || !result || !Array.isArray(result.matches)) return;
+        pendingHtmlFind.current = null;
+        applyFindResultRef.current(result, pending.reset, pending.scroll);
+        return;
+      }
+      if (data?.type === PREVIEW_FIND_KEY_MESSAGE) {
+        const key = data as Partial<PreviewFindShortcut>;
+        if (typeof key.key !== 'string') return;
+        handleFindShortcutRef.current({
+          key: key.key,
+          shiftKey: !!key.shiftKey,
+          altKey: !!key.altKey,
+          ctrlKey: !!key.ctrlKey,
+          metaKey: !!key.metaKey,
+        });
+        return;
+      }
       if (data?.type !== HTML_PREVIEW_LINK_MESSAGE || typeof data.href !== 'string') return;
       followLinkRef.current(data.href);
     };
@@ -689,6 +873,44 @@ const MarkdownPreviewWindow: React.FC = () => {
           )}
         </div>
 
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+        <button
+          data-testid="markdown-preview-find-toggle"
+          aria-label="Find in Preview"
+          aria-pressed={findOpen}
+          onClick={() => (findOpen ? closeFind() : openFind())}
+          title="Find in Preview (Cmd/Ctrl+F)"
+          style={{
+            width: '28px',
+            height: '24px',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+            cursor: 'pointer',
+            borderRadius: '4px',
+            border: `1px solid ${borderColor}`,
+            backgroundColor: findOpen ? colors.tabActiveBackground : 'transparent',
+            color: pageFg,
+            opacity: findOpen ? 1 : 0.65,
+            flexShrink: 0,
+          }}
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <circle cx="7" cy="7" r="4.5" />
+            <line x1="10.5" y1="10.5" x2="14" y2="14" />
+          </svg>
+        </button>
         <button
           data-testid="markdown-preview-pin-toggle"
           aria-label={alwaysOnTop ? 'Unpin Preview Window' : 'Pin Preview Window Always on Top'}
@@ -727,7 +949,37 @@ const MarkdownPreviewWindow: React.FC = () => {
             <line x1="8" y1="9.5" x2="8" y2="14" />
           </svg>
         </button>
+        </div>
       </div>
+
+      {findOpen && (
+        <PreviewFindBar
+          query={findQuery}
+          options={findOptions}
+          matches={findResult.matches}
+          activeIndex={activeMatch}
+          truncated={findResult.truncated}
+          error={findResult.error}
+          showAll={showAllMatches}
+          focusRequest={findFocusRequest}
+          colors={{
+            background: headerBg,
+            foreground: pageFg,
+            border: borderColor,
+            muted: mutedFg,
+            inputBackground: pageBg,
+            activeToggle: isLight ? '#dbe9ff' : colors.tabActiveBackground,
+            error: isLight ? '#9a3412' : '#f0a070',
+          }}
+          onQueryChange={setFindQuery}
+          onToggleOption={option => setFindOptions(prev => ({ ...prev, [option]: !prev[option] }))}
+          onNext={() => stepMatch(1)}
+          onPrevious={() => stepMatch(-1)}
+          onToggleShowAll={() => setShowAllMatches(prev => !prev)}
+          onSelectMatch={index => activateMatch(index, true)}
+          onClose={closeFind}
+        />
+      )}
 
       {navError && (
         <div
@@ -843,6 +1095,9 @@ const MarkdownPreviewWindow: React.FC = () => {
             title={payload.title ? `HTML Preview — ${payload.title}` : 'HTML Preview'}
             sandbox="allow-scripts"
             srcDoc={renderedHtml}
+            onLoad={() => {
+              if (findOpen) runFindRef.current(false, false);
+            }}
             style={{
               flex: 1,
               width: '100%',

@@ -143,7 +143,13 @@ export const electronAPI = {
   onSaveAllFiles: (callback: () => void) => ipcRenderer.on('menu:saveAll', () => callback()),
   onCloseTab: (callback: () => void) => ipcRenderer.on('menu:closeTab', () => callback()),
   onReopenClosedTab: (callback: () => void) => ipcRenderer.on('menu:reopenClosedTab', () => callback()),
-  onFind: (callback: () => void) => ipcRenderer.on('menu:find', () => callback()),
+  onFind: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('menu:find', listener);
+    return () => {
+      ipcRenderer.removeListener('menu:find', listener);
+    };
+  },
   onReplace: (callback: () => void) => ipcRenderer.on('menu:replace', () => callback()),
   onFindInTabs: (callback: () => void) => ipcRenderer.on('menu:findInTabs', () => callback()),
   onGoToLine: (callback: () => void) => ipcRenderer.on('menu:goToLine', () => callback()),

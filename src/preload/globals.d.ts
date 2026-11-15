@@ -157,7 +157,8 @@ declare global {
       onSaveAllFiles: (callback: () => void) => void;
       onCloseTab: (callback: () => void) => void;
       onReopenClosedTab: (callback: () => void) => void;
-      onFind: (callback: () => void) => void;
+      /** Returns an unsubscribe function. */
+      onFind: (callback: () => void) => () => void;
       onReplace: (callback: () => void) => void;
       onFindInTabs: (callback: () => void) => void;
       onGoToLine: (callback: () => void) => void;

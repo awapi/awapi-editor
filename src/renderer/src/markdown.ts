@@ -138,11 +138,26 @@ export function sanitizeUrl(
   return null;
 }
 
+const ASSET_URL_PREFIX = 'awapi-asset://local';
+
 /**
  * Resolves a relative asset path (e.g. `./img/diagram.png` or `../logo.png`)
- * against the directory containing `baseFilePath` into a `file://` URL.
+ * against the directory containing `baseFilePath` into an `awapi-asset://` URL.
  */
 export function resolveRelativeFileUrl(relativePath: string, baseFilePath: string): string {
+  const joined = resolveRelativeFilePath(relativePath, baseFilePath);
+  if (joined.startsWith('/')) {
+    return `${ASSET_URL_PREFIX}${joined}`;
+  }
+  return `${ASSET_URL_PREFIX}/${joined}`;
+}
+
+/**
+ * Resolves `relativePath` against the directory containing `baseFilePath` into a
+ * normalized, forward-slash separated file system path (`.` / `..` collapsed).
+ * Absolute paths (`/…` or `C:/…`) are returned normalized and ignore the base.
+ */
+export function resolveRelativeFilePath(relativePath: string, baseFilePath: string): string {
   // Normalize backslashes to forward slashes
   const normalizedBase = baseFilePath.replace(/\\/g, '/');
   const lastSlash = normalizedBase.lastIndexOf('/');
@@ -174,11 +189,108 @@ export function resolveRelativeFileUrl(relativePath: string, baseFilePath: strin
     resolved.push(part);
   }
 
-  const joined = resolved.join('/');
-  if (joined.startsWith('/')) {
-    return `awapi-asset://local${joined}`;
+  return resolved.join('/');
+}
+
+/** Where a link clicked inside a preview should take the user. */
+export type PreviewLinkTarget =
+  | { kind: 'anchor'; id: string }
+  | { kind: 'external'; url: string }
+  | { kind: 'file'; path: string; fragment: string | null };
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
   }
-  return `awapi-asset://local/${joined}`;
+}
+
+/**
+ * Classifies an `href` clicked in a Markdown or HTML preview:
+ * - `#section` → in-page anchor
+ * - `http(s):` / `mailto:` → external (opened in the OS browser / mail client)
+ * - relative paths, `awapi-asset://local/…` and `file://…` URLs → a local file
+ *   resolved against `baseFilePath` (Windows drive paths use backslashes)
+ * Returns null for unsupported schemes, or relative links without a base file.
+ */
+export function resolvePreviewLink(
+  href: string,
+  baseFilePath: string | null | undefined,
+): PreviewLinkTarget | null {
+  const trimmed = href.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.startsWith('#')) {
+    const id = safeDecodeURIComponent(trimmed.slice(1));
+    return id ? { kind: 'anchor', id } : null;
+  }
+  if (/^(?:https?:|mailto:)/i.test(trimmed)) {
+    return { kind: 'external', url: trimmed };
+  }
+
+  let rawPath: string;
+  let isAbsoluteUrl = false;
+  if (trimmed.toLowerCase().startsWith(`${ASSET_URL_PREFIX}/`)) {
+    rawPath = trimmed.slice(ASSET_URL_PREFIX.length);
+    isAbsoluteUrl = true;
+  } else if (/^file:\/\/\//i.test(trimmed)) {
+    rawPath = trimmed.slice('file://'.length);
+    isAbsoluteUrl = true;
+  } else if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+    return null;
+  } else {
+    rawPath = trimmed;
+  }
+
+  const hashIdx = rawPath.indexOf('#');
+  const fragment = hashIdx >= 0 ? safeDecodeURIComponent(rawPath.slice(hashIdx + 1)) || null : null;
+  if (hashIdx >= 0) rawPath = rawPath.slice(0, hashIdx);
+  const queryIdx = rawPath.indexOf('?');
+  if (queryIdx >= 0) rawPath = rawPath.slice(0, queryIdx);
+
+  let decodedPath = safeDecodeURIComponent(rawPath);
+  if (isAbsoluteUrl && /^\/[a-zA-Z]:\//.test(decodedPath)) {
+    decodedPath = decodedPath.slice(1);
+  }
+  if (!decodedPath) {
+    return fragment ? { kind: 'anchor', id: fragment } : null;
+  }
+
+  const isAbsolutePath = decodedPath.startsWith('/') || /^[a-zA-Z]:\//.test(decodedPath);
+  if (!isAbsolutePath && !baseFilePath) return null;
+
+  const resolved = resolveRelativeFilePath(decodedPath, baseFilePath ?? '');
+  if (!resolved || resolved === '/') return null;
+  const path = /^[a-zA-Z]:\//.test(resolved) ? resolved.replace(/\//g, '\\') : resolved;
+  return { kind: 'file', path, fragment };
+}
+
+/** `postMessage` type used by HTML previews to forward link clicks to the preview window. */
+export const HTML_PREVIEW_LINK_MESSAGE = 'awapi-preview-link';
+
+/**
+ * Script injected into sandboxed HTML previews. The iframe has an opaque origin,
+ * so the preview window cannot observe its clicks; this forwards link clicks
+ * (with the `<base>`-resolved URL) to the parent and handles `#anchor` links
+ * in place (they would otherwise navigate to the `<base>` directory).
+ */
+const HTML_PREVIEW_LINK_SCRIPT = `<script data-awapi-preview-links>(function(){document.addEventListener('click',function(e){if(e.defaultPrevented||e.button!==0)return;var t=e.target;var a=t&&t.closest?t.closest('a[href]'):null;if(!a)return;var raw=a.getAttribute('href')||'';if(/^\\s*javascript:/i.test(raw))return;e.preventDefault();if(raw.charAt(0)==='#'){var id=raw.slice(1);try{id=decodeURIComponent(id);}catch(_){}var el=id?(document.getElementById(id)||document.getElementsByName(id)[0]):null;if(el&&el.scrollIntoView)el.scrollIntoView();else if(!id)window.scrollTo(0,0);return;}parent.postMessage({type:'${HTML_PREVIEW_LINK_MESSAGE}',href:a.href},'*');});})();</script>`;
+
+/**
+ * Injects the link-forwarding script into an HTML preview document, inside
+ * `<head>` when present (or after `<html>` / the doctype) so the document's
+ * rendering mode is not affected.
+ */
+export function injectHtmlPreviewLinkHandler(html: string): string {
+  for (const pattern of [/<head(?:\s[^>]*)?>/i, /<html(?:\s[^>]*)?>/i, /<!doctype[^>]*>/i]) {
+    const match = pattern.exec(html);
+    if (match) {
+      const insertPos = match.index + match[0].length;
+      return `${html.slice(0, insertPos)}${HTML_PREVIEW_LINK_SCRIPT}${html.slice(insertPos)}`;
+    }
+  }
+  return `${HTML_PREVIEW_LINK_SCRIPT}${html}`;
 }
 
 /** Generate a GitHub-style slug id for a heading text. */

@@ -269,6 +269,8 @@ declare global {
       ) => () => void;
       onMarkdownPreview: (callback: () => void) => void;
       getOpenMarkdownPreviewTabIds: () => Promise<string[]>;
+      /** Opens a file linked from a preview in the main editor window; resolves false if it is not a readable file. */
+      openPreviewLinkInEditor: (filePath: string) => Promise<boolean>;
       onMarkdownPreviewVisibilityChanged: (callback: (openTabIds: string[]) => void) => void;
 
       removeListeners: () => void;

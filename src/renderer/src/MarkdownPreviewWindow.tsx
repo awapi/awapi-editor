@@ -1,6 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from './theme/ThemeContext';
-import { isHtmlTab, prepareHtmlForPreview, renderMarkdownToHtml } from './markdown';
+import {
+  HTML_PREVIEW_LINK_MESSAGE,
+  injectHtmlPreviewLinkHandler,
+  isHtmlTab,
+  isPreviewableTab,
+  prepareHtmlForPreview,
+  renderMarkdownToHtml,
+  resolvePreviewLink,
+} from './markdown';
 
 export interface MarkdownPreviewPayload {
   title: string;
@@ -10,14 +18,38 @@ export interface MarkdownPreviewPayload {
   mode?: 'markdown' | 'html' | 'unsupported';
 }
 
+function fileBaseName(filePath: string): string {
+  return filePath.split(/[\\/]/).pop() || filePath;
+}
+
+function isSameFilePath(a: string | null, b: string): boolean {
+  if (!a) return false;
+  const norm = (p: string) => p.replace(/\\/g, '/');
+  return /^[a-zA-Z]:/.test(b) ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
+}
+
 const MarkdownPreviewWindow: React.FC = () => {
   const { currentTheme, colors } = useTheme();
-  const [payload, setPayload] = useState<MarkdownPreviewPayload>({
+  const [livePayload, setLivePayload] = useState<MarkdownPreviewPayload>({
     title: 'Markdown Preview',
     filePath: null,
     content: '',
   });
+  // Files reached by clicking links; the last entry is shown instead of the live tab content.
+  const [navStack, setNavStack] = useState<MarkdownPreviewPayload[]>([]);
+  const [navError, setNavError] = useState<string | null>(null);
   const [alwaysOnTop, setAlwaysOnTop] = useState<boolean>(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  // Scroll offset of each history level (0 = live tab) so Back restores position.
+  const scrollPositions = useRef<number[]>([]);
+  const pendingScroll = useRef<{ top: number; fragment?: string | null } | null>(null);
+
+  const topEntry = navStack.length > 0 ? navStack[navStack.length - 1] : null;
+  const payload: MarkdownPreviewPayload = topEntry
+    ? { ...topEntry, theme: livePayload.theme }
+    : livePayload;
+  const isNavigated = topEntry !== null;
 
   useEffect(() => {
     const w = window as any;
@@ -27,7 +59,7 @@ const MarkdownPreviewWindow: React.FC = () => {
       Promise.resolve(w.electronAPI.getMarkdownPreviewData())
         .then((initial: MarkdownPreviewPayload | null) => {
           if (isMounted && initial) {
-            setPayload(initial);
+            setLivePayload(initial);
           }
         })
         .catch(() => {});
@@ -36,7 +68,7 @@ const MarkdownPreviewWindow: React.FC = () => {
     const unsubscribe = w.electronAPI?.onMarkdownPreviewUpdate?.(
       (next: MarkdownPreviewPayload) => {
         if (next) {
-          setPayload(next);
+          setLivePayload(next);
         }
       },
     );
@@ -89,10 +121,130 @@ const MarkdownPreviewWindow: React.FC = () => {
       isUnsupported
         ? ''
         : isHtml
-          ? prepareHtmlForPreview(payload.content, { baseFilePath: payload.filePath })
+          ? injectHtmlPreviewLinkHandler(
+              prepareHtmlForPreview(payload.content, { baseFilePath: payload.filePath }),
+            )
           : renderMarkdownToHtml(payload.content, { baseFilePath: payload.filePath }),
     [isUnsupported, isHtml, payload.content, payload.filePath],
   );
+
+  const scrollToFragment = useCallback((id: string) => {
+    const el =
+      document.getElementById(id) ??
+      document.getElementById(id.toLowerCase()) ??
+      document.getElementsByName(id)[0];
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, []);
+
+  // Apply scroll changes queued by navigation once the new document has rendered.
+  useLayoutEffect(() => {
+    const pending = pendingScroll.current;
+    if (!pending) return;
+    pendingScroll.current = null;
+    if (bodyRef.current) bodyRef.current.scrollTop = pending.top;
+    if (pending.fragment) scrollToFragment(pending.fragment);
+  }, [navStack, scrollToFragment]);
+
+  const openFileFromLink = async (filePath: string, fragment: string | null) => {
+    const api = (window as any).electronAPI;
+    if (isSameFilePath(payload.filePath, filePath)) {
+      if (fragment) scrollToFragment(fragment);
+      return;
+    }
+
+    if (!isPreviewableTab(filePath)) {
+      const opened = await api?.openPreviewLinkInEditor?.(filePath);
+      setNavError(opened ? null : `Could not open ${filePath}`);
+      return;
+    }
+
+    let file: { filePath: string; content: string } | null = null;
+    try {
+      file = (await api?.readFile?.(filePath)) ?? null;
+    } catch {
+      file = null;
+    }
+    if (!file) {
+      setNavError(`Could not open ${filePath}`);
+      return;
+    }
+
+    scrollPositions.current[navStack.length] = bodyRef.current?.scrollTop ?? 0;
+    pendingScroll.current = { top: 0, fragment };
+    setNavError(null);
+    setNavStack(prev => [
+      ...prev,
+      {
+        title: fileBaseName(file!.filePath),
+        filePath: file!.filePath,
+        content: file!.content,
+        mode: isHtmlTab(file!.filePath) ? 'html' : 'markdown',
+      },
+    ]);
+  };
+
+  const followLink = (href: string) => {
+    const target = resolvePreviewLink(href, payload.filePath);
+    if (!target) return;
+    if (target.kind === 'anchor') {
+      scrollToFragment(target.id);
+    } else if (target.kind === 'external') {
+      // Denied by the preview window's open handler and routed to the OS browser / mail client.
+      window.open(target.url, '_blank');
+    } else {
+      void openFileFromLink(target.path, target.fragment);
+    }
+  };
+
+  const followLinkRef = useRef(followLink);
+  followLinkRef.current = followLink;
+
+  const goBack = useCallback(() => {
+    setNavStack(prev => {
+      if (prev.length === 0) return prev;
+      pendingScroll.current = { top: scrollPositions.current[prev.length - 1] ?? 0 };
+      return prev.slice(0, -1);
+    });
+    setNavError(null);
+  }, []);
+
+  // Link clicks forwarded from the sandboxed HTML preview iframe.
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const frameWindow = iframeRef.current?.contentWindow;
+      if (!frameWindow || event.source !== frameWindow) return;
+      const data = event.data as { type?: unknown; href?: unknown } | null;
+      if (data?.type !== HTML_PREVIEW_LINK_MESSAGE || typeof data.href !== 'string') return;
+      followLinkRef.current(data.href);
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
+  // Alt+Left / mouse "back" button return to the previous document.
+  useEffect(() => {
+    if (!isNavigated) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && e.key === 'ArrowLeft') {
+        e.preventDefault();
+        goBack();
+      }
+    };
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button === 3) {
+        e.preventDefault();
+        goBack();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [isNavigated, goBack]);
 
   const handleToggleAlwaysOnTop = async () => {
     const w = window as any;
@@ -115,20 +267,9 @@ const MarkdownPreviewWindow: React.FC = () => {
     const href = anchor.getAttribute('href');
     if (!href) return;
 
-    // In-page heading anchor (#section-name)
-    if (href.startsWith('#')) {
-      e.preventDefault();
-      const id = href.slice(1);
-      if (!id) return;
-      const heading = document.getElementById(id);
-      if (heading && typeof heading.scrollIntoView === 'function') {
-        heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-      return;
-    }
-
-    // Prevent the preview BrowserWindow from navigating away
+    // Never let the preview BrowserWindow itself navigate away
     e.preventDefault();
+    followLink(href);
   };
 
   const cssText = `
@@ -281,6 +422,44 @@ const MarkdownPreviewWindow: React.FC = () => {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, overflow: 'hidden' }}>
+          {isNavigated && (
+            <button
+              data-testid="markdown-preview-back"
+              aria-label="Back"
+              title="Back (Alt+Left)"
+              onClick={goBack}
+              style={{
+                width: '28px',
+                height: '24px',
+                marginRight: '8px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 0,
+                cursor: 'pointer',
+                borderRadius: '4px',
+                border: `1px solid ${borderColor}`,
+                backgroundColor: 'transparent',
+                color: pageFg,
+                flexShrink: 0,
+              }}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path d="M13 8H3M7 4L3 8l4 4" />
+              </svg>
+            </button>
+          )}
           <span
             data-testid="markdown-preview-title"
             style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
@@ -302,7 +481,7 @@ const MarkdownPreviewWindow: React.FC = () => {
               flexShrink: 0,
             }}
           >
-            {isUnsupported ? 'N/A' : 'Live Preview'}
+            {isUnsupported ? 'N/A' : isNavigated ? 'Linked File' : 'Live Preview'}
           </span>
           {payload.filePath && (
             <span
@@ -362,8 +541,31 @@ const MarkdownPreviewWindow: React.FC = () => {
         </button>
       </div>
 
+      {navError && (
+        <div
+          data-testid="markdown-preview-nav-error"
+          role="alert"
+          style={{
+            padding: '6px 14px',
+            fontSize: '12px',
+            color: isLight ? '#9a3412' : '#f0a070',
+            backgroundColor: codeBg,
+            borderBottom: `1px solid ${borderColor}`,
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+          title={navError}
+        >
+          {navError}
+        </div>
+      )}
+
       {/* Scrollable rendered Markdown or sandboxed HTML body */}
       <div
+        ref={bodyRef}
+        data-testid="markdown-preview-body"
         style={{
           flex: 1,
           minHeight: 0,
@@ -448,6 +650,7 @@ const MarkdownPreviewWindow: React.FC = () => {
           </div>
         ) : isHtml ? (
           <iframe
+            ref={iframeRef}
             data-testid="html-preview-iframe"
             title={payload.title ? `HTML Preview — ${payload.title}` : 'HTML Preview'}
             sandbox="allow-scripts"

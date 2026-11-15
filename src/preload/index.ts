@@ -206,6 +206,9 @@ export const electronAPI = {
   onMarkdownPreview: (callback: () => void) => ipcRenderer.on('menu:markdownPreview', () => callback()),
   getOpenMarkdownPreviewTabIds: () =>
     ipcRenderer.invoke('markdown:getOpenPreviewTabIds') as Promise<string[]>,
+  /** Opens a file linked from a preview in the main editor window; resolves false if it is not a readable file. */
+  openPreviewLinkInEditor: (filePath: string) =>
+    ipcRenderer.invoke('markdown:openFileInEditor', filePath) as Promise<boolean>,
   onMarkdownPreviewVisibilityChanged: (callback: (openTabIds: string[]) => void) =>
     ipcRenderer.on('markdown:previewVisibilityChanged', (_, openTabIds: string[]) => callback(openTabIds)),
   // Cleanup listeners

@@ -7,6 +7,9 @@ import {
   escapeHtml,
   sanitizeUrl,
   resolveRelativeFileUrl,
+  resolvePreviewLink,
+  injectHtmlPreviewLinkHandler,
+  HTML_PREVIEW_LINK_MESSAGE,
   slugifyHeading,
   renderInlineMarkdown,
   renderMarkdownToHtml,
@@ -131,6 +134,69 @@ describe('sanitizeUrl & resolveRelativeFileUrl', () => {
     expect(
       resolveRelativeFileUrl('../shared/diagram.png', 'C:\\Projects\\awapi\\docs\\guide.md'),
     ).toBe('awapi-asset://local/C:/Projects/awapi/shared/diagram.png');
+  });
+});
+
+describe('resolvePreviewLink', () => {
+  it('classifies in-page anchors and external links', () => {
+    expect(resolvePreviewLink('#getting-started', '/docs/README.md')).toEqual({
+      kind: 'anchor',
+      id: 'getting-started',
+    });
+    expect(resolvePreviewLink('https://example.com/a', '/docs/README.md')).toEqual({
+      kind: 'external',
+      url: 'https://example.com/a',
+    });
+    expect(resolvePreviewLink('mailto:a@b.co', null)).toEqual({ kind: 'external', url: 'mailto:a@b.co' });
+  });
+
+  it('resolves relative file links against the current file, with fragments and encoded names', () => {
+    expect(resolvePreviewLink('../guide/My%20Setup.md?raw=1#install', '/docs/intro/README.md')).toEqual({
+      kind: 'file',
+      path: '/docs/guide/My Setup.md',
+      fragment: 'install',
+    });
+    expect(resolvePreviewLink('./other.html', 'C:\\proj\\site\\index.html')).toEqual({
+      kind: 'file',
+      path: 'C:\\proj\\site\\other.html',
+      fragment: null,
+    });
+  });
+
+  it('converts awapi-asset:// and file:// URLs (from HTML previews) to file paths', () => {
+    expect(resolvePreviewLink('awapi-asset://local/C:/proj/site/about%20us.html#team', null)).toEqual({
+      kind: 'file',
+      path: 'C:\\proj\\site\\about us.html',
+      fragment: 'team',
+    });
+    expect(resolvePreviewLink('file:///home/me/notes.md', null)).toEqual({
+      kind: 'file',
+      path: '/home/me/notes.md',
+      fragment: null,
+    });
+  });
+
+  it('returns null for unsafe schemes and relative links without a base file', () => {
+    expect(resolvePreviewLink('javascript:alert(1)', '/a.md')).toBeNull();
+    expect(resolvePreviewLink('about:srcdoc', '/a.md')).toBeNull();
+    expect(resolvePreviewLink('other.md', null)).toBeNull();
+    expect(resolvePreviewLink('   ', '/a.md')).toBeNull();
+  });
+});
+
+describe('injectHtmlPreviewLinkHandler', () => {
+  const marker = '<script data-awapi-preview-links>';
+
+  it('injects the link-forwarding script inside <head>', () => {
+    const out = injectHtmlPreviewLinkHandler('<!DOCTYPE html><html><head><title>x</title></head><body></body></html>');
+    expect(out.indexOf(marker)).toBe(out.indexOf('<head>') + '<head>'.length);
+    expect(out).toContain(HTML_PREVIEW_LINK_MESSAGE);
+  });
+
+  it('keeps the doctype first when there is no <head> or <html>', () => {
+    const out = injectHtmlPreviewLinkHandler('<!doctype html><p>hi</p>');
+    expect(out.startsWith('<!doctype html>' + marker)).toBe(true);
+    expect(injectHtmlPreviewLinkHandler('<p>hi</p>').startsWith(marker)).toBe(true);
   });
 });
 

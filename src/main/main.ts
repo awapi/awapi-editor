@@ -1528,6 +1528,25 @@ ipcMain.handle('markdown:getPreviewData', (event) => {
 ipcMain.handle('markdown:getOpenPreviewTabIds', (event) => {
   return markdownPreviewManager.getOpenTabIds(event.sender.id);
 });
+
+/**
+ * Opens a file linked from a preview (one that cannot itself be previewed,
+ * e.g. `.ts` or `.png`) as a tab in the main editor window.
+ */
+ipcMain.handle('markdown:openFileInEditor', (_event, filePath: unknown) => {
+  if (typeof filePath !== 'string' || !isAbsolute(filePath)) return false;
+  try {
+    if (!fs.statSync(filePath).isFile()) return false;
+  } catch {
+    return false;
+  }
+  sendFileToRenderer(filePath);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+  return true;
+});
 /**
  * Refreshes the menus that show `win`'s Always on Top state: the pop-out's own
  * menu (Windows/Linux) and the application menu checkbox (see appMenuAlwaysOnTopWindow).

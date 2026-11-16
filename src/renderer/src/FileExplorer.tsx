@@ -1,7 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowUp, ChevronDown, ChevronRight, FolderOpen, RefreshCw, ChevronsDownUp, Star, X } from 'lucide-react';
 import { useTheme } from './theme/ThemeContext';
 import { FileIcon, FolderIcon } from './FileIcon';
+import { GitStatusBadge } from './GitStatusBadge';
+import { useGitStatus } from './useGitStatus';
+import { getGitStatusForPath } from '../../shared/git';
+import { GitSubmenu } from './GitSubmenu';
+import { useGitActions } from './useGitActions';
+import type { GitMenuAction, GitTarget } from './gitMenu';
 
 export interface ExplorerEntry {
   name: string;
@@ -52,6 +59,38 @@ export const MIN_OPEN_EDITORS_HEIGHT = 48;
 export const MAX_OPEN_EDITORS_HEIGHT = 500;
 /** Default maximum height of the Favorites list before it scrolls internally (~6 rows). */
 export const FAVORITES_MAX_HEIGHT = 160;
+/** Name opacity for Git-ignored entries in the tree. */
+const IGNORED_OPACITY = 0.55;
+/** Positions the Git status overlay relative to a tree icon. */
+const iconWrapStyle: React.CSSProperties = {
+  position: 'relative',
+  display: 'inline-flex',
+  alignItems: 'center',
+  flexShrink: 0,
+};
+
+/** Gap kept between a popup menu and the window edge. */
+export const MENU_EDGE_MARGIN = 4;
+
+/**
+ * Shifts a popup menu opened at (`x`, `y`) so it stays inside the viewport:
+ * it moves up/left by the overflow and never past the top/left margin.
+ */
+export function clampMenuPosition(
+  x: number,
+  y: number,
+  menuWidth: number,
+  menuHeight: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): { x: number; y: number } {
+  const maxX = viewportWidth - menuWidth - MENU_EDGE_MARGIN;
+  const maxY = viewportHeight - menuHeight - MENU_EDGE_MARGIN;
+  return {
+    x: Math.max(MENU_EDGE_MARGIN, Math.min(x, maxX)),
+    y: Math.max(MENU_EDGE_MARGIN, Math.min(y, maxY)),
+  };
+}
 
 /** Normalizes slashes and trailing separators for cross-platform path comparisons. */
 export function normalizePathForCompare(p: string): string {
@@ -177,6 +216,8 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
   const guideLineColor = currentTheme === 'light' ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.08)';
   const activeRowBg = currentTheme === 'light' ? '#d6ebff' : '#37373d';
 
+  const { index: gitIndex, refresh: refreshGitStatus } = useGitStatus(rootFolderPath, isOpen);
+
   const loadDirectory = useCallback(async (dirPath: string, isRoot = false) => {
     const w = window as any;
     if (!w.electronAPI?.readDirectory) return;
@@ -216,7 +257,8 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     for (const dirPath of Array.from(expandedDirsRef.current)) {
       void loadDirectory(dirPath, false);
     }
-  }, [refreshToken, rootFolderPath, loadDirectory]);
+    refreshGitStatus();
+  }, [refreshToken, rootFolderPath, loadDirectory, refreshGitStatus]);
 
   // Synchronize watched directories with the main process so external/saved files refresh live
   const watchedDirsList = React.useMemo(() => {
@@ -237,6 +279,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     if (!w.electronAPI?.onExplorerDirChanged) return;
     const unsubscribe = w.electronAPI.onExplorerDirChanged((changedDirPath: string) => {
       if (!changedDirPath) return;
+      refreshGitStatus();
       const normChanged = normalizePathForCompare(changedDirPath);
       const currentRoot = rootFolderPathRef.current;
       if (currentRoot && normalizePathForCompare(currentRoot) === normChanged) {
@@ -253,7 +296,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, [loadDirectory]);
+  }, [loadDirectory, refreshGitStatus]);
 
   const handleRefreshAll = useCallback(() => {
     if (!rootFolderPath) return;
@@ -261,7 +304,31 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     for (const dirPath of Array.from(expandedDirsRef.current)) {
       void loadDirectory(dirPath, false);
     }
-  }, [rootFolderPath, loadDirectory]);
+    refreshGitStatus();
+  }, [rootFolderPath, loadDirectory, refreshGitStatus]);
+
+  const { run: runGitAction, element: gitActionsElement } = useGitActions({
+    colors,
+    isLightTheme: currentTheme === 'light',
+    activeRowBg,
+    onCompleted: handleRefreshAll,
+  });
+
+  // Keep the context menu fully inside the window (e.g. right-clicking near the bottom edge).
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const [contextMenuPos, setContextMenuPos] = useState<{ x: number; y: number } | null>(null);
+  React.useLayoutEffect(() => {
+    if (!contextMenu) {
+      setContextMenuPos(null);
+      return;
+    }
+    const el = contextMenuRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setContextMenuPos(
+      clampMenuPosition(contextMenu.x, contextMenu.y, rect.width, rect.height, window.innerWidth, window.innerHeight),
+    );
+  }, [contextMenu]);
 
   const handleCollapseAll = useCallback(() => {
     setExpandedDirs(new Set());
@@ -361,6 +428,26 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     const { targetDirPath } = contextMenu;
     setContextMenu(null);
     onOpenInIntegratedTerminal?.(targetDirPath);
+  };
+
+  /** Git target for the open context menu, or null outside a repository. */
+  const getContextGitTarget = (): GitTarget | null => {
+    if (!contextMenu || !gitIndex) return null;
+    const { entry } = contextMenu;
+    if (entry) {
+      const status = getGitStatusForPath(gitIndex, entry.path, entry.isDirectory);
+      return status ? { path: entry.path, isDirectory: entry.isDirectory, isRoot: false, status } : null;
+    }
+    // The Explorer root may itself be the repository root, which has no own status entry.
+    const rootStatus =
+      getGitStatusForPath(gitIndex, contextMenu.targetDirPath, true) ??
+      (Array.from(gitIndex.files.values()).includes('conflicted') ? 'conflicted' : 'clean');
+    return { path: contextMenu.targetDirPath, isDirectory: true, isRoot: true, status: rootStatus };
+  };
+
+  const handleGitActionFromContextMenu = (action: GitMenuAction, target: GitTarget) => {
+    setContextMenu(null);
+    void runGitAction(action, target);
   };
 
   const closeCreateModal = () => {
@@ -671,6 +758,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
       if (entry.isDirectory) {
         const expanded = isDirExpanded(entry.path);
         const folderHasDirty = isFolderDirty(entry.path);
+        const folderGitStatus = getGitStatusForPath(gitIndex, entry.path, true);
         return (
           <React.Fragment key={entry.path}>
             <div
@@ -712,7 +800,10 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
               <span style={{ display: 'inline-flex', alignItems: 'center', opacity: 0.75, flexShrink: 0 }}>
                 {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               </span>
-              <FolderIcon name={entry.name} isOpen={expanded} size={16} />
+              <span style={iconWrapStyle}>
+                <FolderIcon name={entry.name} isOpen={expanded} size={16} />
+                {folderGitStatus && <GitStatusBadge status={folderGitStatus} />}
+              </span>
               <span
                 style={{
                   flexGrow: 1,
@@ -720,6 +811,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                   color: folderHasDirty ? dirtyColor : colors.foreground,
+                  opacity: folderGitStatus === 'ignored' ? IGNORED_OPACITY : 1,
                 }}
               >
                 {entry.name}
@@ -762,6 +854,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
       const normEntryPath = normalizePathForCompare(entry.path);
       const isSelected = normActiveFilePath === normEntryPath;
       const dirty = isFileDirty(entry.path);
+      const fileGitStatus = getGitStatusForPath(gitIndex, entry.path, false);
 
       return (
         <div
@@ -812,13 +905,17 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
             color: dirty ? dirtyColor : colors.foreground,
           }}
         >
-          <FileIcon filename={entry.name} size={16} />
+          <span style={iconWrapStyle}>
+            <FileIcon filename={entry.name} size={16} />
+            {fileGitStatus && <GitStatusBadge status={fileGitStatus} />}
+          </span>
           <span
             style={{
               flexGrow: 1,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
+              opacity: fileGitStatus === 'ignored' ? IGNORED_OPACITY : 1,
             }}
           >
             {entry.name}
@@ -1446,63 +1543,38 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
         }}
       />
 
-      {/* Explorer Item Context Menu */}
-      {contextMenu && (
+      {/* Popups are portaled to <body> so editor/terminal panels can never cover or clip them. */}
+      {createPortal(
         <>
-          <div
-            data-testid="explorer-context-menu-backdrop"
-            style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
-            onClick={() => setContextMenu(null)}
-          />
-          <div
-            data-testid="explorer-context-menu"
-            role="menu"
-            style={{
-              position: 'fixed',
-              top: contextMenu.y,
-              left: contextMenu.x,
-              zIndex: 9999,
-              backgroundColor: colors.background,
-              border: `1px solid ${colors.tabHover}`,
-              borderRadius: '4px',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
-              minWidth: '170px',
-              padding: '4px 0',
-            }}
-          >
-            <div
-              role="menuitem"
-              data-testid="explorer-context-open-terminal"
-              onClick={handleOpenTerminalFromContextMenu}
-              onMouseEnter={e => {
-                (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
-              }}
-              onMouseLeave={e => {
-                (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
-              }}
-              style={{
-                padding: '7px 14px',
-                cursor: 'pointer',
-                fontSize: '13px',
-                color: colors.foreground,
-                backgroundColor: 'transparent',
-              }}
-            >
-              Open in Integrated Terminal
-            </div>
-            <div
-              style={{
-                height: '1px',
-                margin: '4px 0',
-                backgroundColor: colors.tabHover,
-              }}
-            />
-            {(contextMenu.entry === null || contextMenu.entry.isDirectory) && (
-              <>
+          {/* Explorer Item Context Menu */}
+          {contextMenu && (
+            <>
+              <div
+                data-testid="explorer-context-menu-backdrop"
+                style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
+                onClick={() => setContextMenu(null)}
+              />
+              <div
+                data-testid="explorer-context-menu"
+                ref={contextMenuRef}
+                role="menu"
+                style={{
+                  position: 'fixed',
+                  top: contextMenuPos?.y ?? contextMenu.y,
+                  left: contextMenuPos?.x ?? contextMenu.x,
+                  zIndex: 9999,
+                  backgroundColor: colors.background,
+                  border: `1px solid ${colors.tabHover}`,
+                  borderRadius: '4px',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
+                  minWidth: '170px',
+                  padding: '4px 0',
+                }}
+              >
                 <div
                   role="menuitem"
-                  data-testid="explorer-context-new-file"
-                  onClick={handleNewFileFromContextMenu}
+                  data-testid="explorer-context-open-terminal"
+                  onClick={handleOpenTerminalFromContextMenu}
                   onMouseEnter={e => {
                     (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
                   }}
@@ -1517,41 +1589,27 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
                     backgroundColor: 'transparent',
                   }}
                 >
-                  New File…
+                  Open in Integrated Terminal
                 </div>
+                {(() => {
+                  const gitTarget = getContextGitTarget();
+                  return gitTarget ? (
+                    <GitSubmenu target={gitTarget} colors={colors} onPick={handleGitActionFromContextMenu} />
+                  ) : null;
+                })()}
                 <div
-                  role="menuitem"
-                  data-testid="explorer-context-new-folder"
-                  onClick={handleNewFolderFromContextMenu}
-                  onMouseEnter={e => {
-                    (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
-                  }}
-                  onMouseLeave={e => {
-                    (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
-                  }}
                   style={{
-                    padding: '7px 14px',
-                    cursor: 'pointer',
-                    fontSize: '13px',
-                    color: colors.foreground,
-                    backgroundColor: 'transparent',
+                    height: '1px',
+                    margin: '4px 0',
+                    backgroundColor: colors.tabHover,
                   }}
-                >
-                  New Folder…
-                </div>
-                {onToggleFavoriteFolder && (
+                />
+                {(contextMenu.entry === null || contextMenu.entry.isDirectory) && (
                   <>
                     <div
-                      style={{
-                        height: '1px',
-                        margin: '4px 0',
-                        backgroundColor: colors.tabHover,
-                      }}
-                    />
-                    <div
                       role="menuitem"
-                      data-testid="explorer-context-toggle-favorite"
-                      onClick={handleToggleFavoriteFromContextMenu}
+                      data-testid="explorer-context-new-file"
+                      onClick={handleNewFileFromContextMenu}
                       onMouseEnter={e => {
                         (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
                       }}
@@ -1566,418 +1624,471 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
                         backgroundColor: 'transparent',
                       }}
                     >
-                      {isFolderFavorited(contextMenu.targetDirPath)
-                        ? 'Remove from Favorites'
-                        : 'Add to Favorites'}
+                      New File…
+                    </div>
+                    <div
+                      role="menuitem"
+                      data-testid="explorer-context-new-folder"
+                      onClick={handleNewFolderFromContextMenu}
+                      onMouseEnter={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
+                      }}
+                      onMouseLeave={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        padding: '7px 14px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: colors.foreground,
+                        backgroundColor: 'transparent',
+                      }}
+                    >
+                      New Folder…
+                    </div>
+                    {onToggleFavoriteFolder && (
+                      <>
+                        <div
+                          style={{
+                            height: '1px',
+                            margin: '4px 0',
+                            backgroundColor: colors.tabHover,
+                          }}
+                        />
+                        <div
+                          role="menuitem"
+                          data-testid="explorer-context-toggle-favorite"
+                          onClick={handleToggleFavoriteFromContextMenu}
+                          onMouseEnter={e => {
+                            (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
+                          }}
+                          onMouseLeave={e => {
+                            (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+                          }}
+                          style={{
+                            padding: '7px 14px',
+                            cursor: 'pointer',
+                            fontSize: '13px',
+                            color: colors.foreground,
+                            backgroundColor: 'transparent',
+                          }}
+                        >
+                          {isFolderFavorited(contextMenu.targetDirPath)
+                            ? 'Remove from Favorites'
+                            : 'Add to Favorites'}
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
+                {contextMenu.entry?.isDirectory && (
+                  <>
+                    <div
+                      style={{
+                        height: '1px',
+                        margin: '4px 0',
+                        backgroundColor: colors.tabHover,
+                      }}
+                    />
+                    <div
+                      role="menuitem"
+                      data-testid="explorer-context-open-folder"
+                      onClick={handleOpenFolderFromContextMenu}
+                      onMouseEnter={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
+                      }}
+                      onMouseLeave={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        padding: '7px 14px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: colors.foreground,
+                        backgroundColor: 'transparent',
+                      }}
+                    >
+                      Open Folder
+                    </div>
+                    <div
+                      style={{
+                        height: '1px',
+                        margin: '4px 0',
+                        backgroundColor: colors.tabHover,
+                      }}
+                    />
+                  </>
+                )}
+                {contextMenu.entry && (
+                  <>
+                    <div
+                      role="menuitem"
+                      data-testid="explorer-context-rename"
+                      onClick={handleStartRenameFromContextMenu}
+                      onMouseEnter={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
+                      }}
+                      onMouseLeave={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        padding: '7px 14px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: colors.foreground,
+                        backgroundColor: 'transparent',
+                      }}
+                    >
+                      Rename…
+                    </div>
+                    <div
+                      role="menuitem"
+                      data-testid="explorer-context-delete"
+                      onClick={handleStartDeleteFromContextMenu}
+                      onMouseEnter={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
+                      }}
+                      onMouseLeave={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        padding: '7px 14px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: '#e06c75',
+                        backgroundColor: 'transparent',
+                      }}
+                    >
+                      Delete
                     </div>
                   </>
                 )}
-              </>
-            )}
-            {contextMenu.entry?.isDirectory && (
-              <>
-                <div
-                  style={{
-                    height: '1px',
-                    margin: '4px 0',
-                    backgroundColor: colors.tabHover,
-                  }}
-                />
-                <div
-                  role="menuitem"
-                  data-testid="explorer-context-open-folder"
-                  onClick={handleOpenFolderFromContextMenu}
-                  onMouseEnter={e => {
-                    (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
-                  }}
-                  onMouseLeave={e => {
-                    (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
-                  }}
-                  style={{
-                    padding: '7px 14px',
-                    cursor: 'pointer',
-                    fontSize: '13px',
-                    color: colors.foreground,
-                    backgroundColor: 'transparent',
-                  }}
-                >
-                  Open Folder
-                </div>
-                <div
-                  style={{
-                    height: '1px',
-                    margin: '4px 0',
-                    backgroundColor: colors.tabHover,
-                  }}
-                />
-              </>
-            )}
-            {contextMenu.entry && (
-              <>
-                <div
-                  role="menuitem"
-                  data-testid="explorer-context-rename"
-                  onClick={handleStartRenameFromContextMenu}
-                  onMouseEnter={e => {
-                    (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
-                  }}
-                  onMouseLeave={e => {
-                    (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
-                  }}
-                  style={{
-                    padding: '7px 14px',
-                    cursor: 'pointer',
-                    fontSize: '13px',
-                    color: colors.foreground,
-                    backgroundColor: 'transparent',
-                  }}
-                >
-                  Rename…
-                </div>
-                <div
-                  role="menuitem"
-                  data-testid="explorer-context-delete"
-                  onClick={handleStartDeleteFromContextMenu}
-                  onMouseEnter={e => {
-                    (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
-                  }}
-                  onMouseLeave={e => {
-                    (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
-                  }}
-                  style={{
-                    padding: '7px 14px',
-                    cursor: 'pointer',
-                    fontSize: '13px',
-                    color: '#e06c75',
-                    backgroundColor: 'transparent',
-                  }}
-                >
-                  Delete
-                </div>
-              </>
-            )}
-          </div>
-        </>
-      )}
+              </div>
+            </>
+          )}
 
-      {/* New File / New Folder Modal */}
-      {createTarget && (
-        <div
-          data-testid="explorer-create-modal-backdrop"
-          onClick={closeCreateModal}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 10000,
-            backgroundColor: 'rgba(0,0,0,0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <div
-            data-testid="explorer-create-modal"
-            role="dialog"
-            aria-label={`New ${createTarget.kind === 'folder' ? 'Folder' : 'File'}`}
-            onClick={e => e.stopPropagation()}
-            style={{
-              backgroundColor: colors.background,
-              border: `1px solid ${colors.tabHover}`,
-              borderRadius: '6px',
-              padding: '20px 24px',
-              minWidth: '340px',
-              boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
-            }}
-          >
-            <div style={{ fontSize: '14px', color: colors.foreground, marginBottom: '8px', fontWeight: 600 }}>
-              New {createTarget.kind === 'folder' ? 'Folder' : 'File'}
-            </div>
+          {/* New File / New Folder Modal */}
+          {createTarget && (
             <div
-              data-testid="explorer-create-parent-hint"
-              title={createTarget.parentDirPath}
+              data-testid="explorer-create-modal-backdrop"
+              onClick={closeCreateModal}
               style={{
-                fontSize: '12px',
-                color: colors.foreground,
-                opacity: 0.7,
-                marginBottom: '10px',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
+                position: 'fixed',
+                inset: 0,
+                zIndex: 10000,
+                backgroundColor: 'rgba(0,0,0,0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
             >
-              In folder: {getPathBasename(createTarget.parentDirPath)}
-            </div>
-            <input
-              data-testid="explorer-create-input"
-              autoFocus
-              placeholder={createTarget.kind === 'folder' ? 'Folder name' : 'File name (e.g. notes.ts)'}
-              value={createInput}
-              onChange={e => {
-                setCreateInput(e.target.value);
-                if (createError) setCreateError(null);
-              }}
-              onKeyDown={e => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  void submitExplorerCreate();
-                } else if (e.key === 'Escape') {
-                  e.preventDefault();
-                  closeCreateModal();
-                }
-              }}
-              style={{
-                width: '100%',
-                padding: '6px 8px',
-                fontSize: '13px',
-                color: colors.foreground,
-                backgroundColor: colors.tabHover,
-                border: `1px solid ${colors.tabHover}`,
-                borderRadius: '3px',
-                boxSizing: 'border-box',
-              }}
-            />
-            {createError && (
               <div
-                data-testid="explorer-create-error"
-                style={{ marginTop: '8px', fontSize: '12px', color: '#e06c75' }}
-              >
-                {createError}
-              </div>
-            )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' }}>
-              <button
-                type="button"
-                data-testid="explorer-create-cancel"
-                onClick={closeCreateModal}
+                data-testid="explorer-create-modal"
+                role="dialog"
+                aria-label={`New ${createTarget.kind === 'folder' ? 'Folder' : 'File'}`}
+                onClick={e => e.stopPropagation()}
                 style={{
-                  padding: '6px 14px',
-                  fontSize: '13px',
-                  color: colors.foreground,
-                  backgroundColor: 'transparent',
+                  backgroundColor: colors.background,
                   border: `1px solid ${colors.tabHover}`,
-                  borderRadius: '3px',
-                  cursor: 'pointer',
+                  borderRadius: '6px',
+                  padding: '20px 24px',
+                  minWidth: '340px',
+                  boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
                 }}
               >
-                Cancel
-              </button>
-              <button
-                type="button"
-                data-testid="explorer-create-submit"
-                onClick={() => {
-                  void submitExplorerCreate();
-                }}
-                style={{
-                  padding: '6px 14px',
-                  fontSize: '13px',
-                  color: colors.background,
-                  backgroundColor: colors.foreground,
-                  border: `1px solid ${colors.foreground}`,
-                  borderRadius: '3px',
-                  cursor: 'pointer',
-                }}
-              >
-                Create
-              </button>
+                <div style={{ fontSize: '14px', color: colors.foreground, marginBottom: '8px', fontWeight: 600 }}>
+                  New {createTarget.kind === 'folder' ? 'Folder' : 'File'}
+                </div>
+                <div
+                  data-testid="explorer-create-parent-hint"
+                  title={createTarget.parentDirPath}
+                  style={{
+                    fontSize: '12px',
+                    color: colors.foreground,
+                    opacity: 0.7,
+                    marginBottom: '10px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  In folder: {getPathBasename(createTarget.parentDirPath)}
+                </div>
+                <input
+                  data-testid="explorer-create-input"
+                  autoFocus
+                  placeholder={createTarget.kind === 'folder' ? 'Folder name' : 'File name (e.g. notes.ts)'}
+                  value={createInput}
+                  onChange={e => {
+                    setCreateInput(e.target.value);
+                    if (createError) setCreateError(null);
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void submitExplorerCreate();
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      closeCreateModal();
+                    }
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '6px 8px',
+                    fontSize: '13px',
+                    color: colors.foreground,
+                    backgroundColor: colors.tabHover,
+                    border: `1px solid ${colors.tabHover}`,
+                    borderRadius: '3px',
+                    boxSizing: 'border-box',
+                  }}
+                />
+                {createError && (
+                  <div
+                    data-testid="explorer-create-error"
+                    style={{ marginTop: '8px', fontSize: '12px', color: '#e06c75' }}
+                  >
+                    {createError}
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' }}>
+                  <button
+                    type="button"
+                    data-testid="explorer-create-cancel"
+                    onClick={closeCreateModal}
+                    style={{
+                      padding: '6px 14px',
+                      fontSize: '13px',
+                      color: colors.foreground,
+                      backgroundColor: 'transparent',
+                      border: `1px solid ${colors.tabHover}`,
+                      borderRadius: '3px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="explorer-create-submit"
+                    onClick={() => {
+                      void submitExplorerCreate();
+                    }}
+                    style={{
+                      padding: '6px 14px',
+                      fontSize: '13px',
+                      color: colors.background,
+                      backgroundColor: colors.foreground,
+                      border: `1px solid ${colors.foreground}`,
+                      borderRadius: '3px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Create
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          )}
 
-      {/* Rename Modal for Explorer File/Folder */}
-      {renameTarget && (
-        <div
-          data-testid="explorer-rename-modal-backdrop"
-          onClick={closeRenameModal}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 10000,
-            backgroundColor: 'rgba(0,0,0,0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <div
-            data-testid="explorer-rename-modal"
-            role="dialog"
-            aria-label={`Rename ${renameTarget.isDirectory ? 'folder' : 'file'}`}
-            onClick={e => e.stopPropagation()}
-            style={{
-              backgroundColor: colors.background,
-              border: `1px solid ${colors.tabHover}`,
-              borderRadius: '6px',
-              padding: '20px 24px',
-              minWidth: '340px',
-              boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
-            }}
-          >
-            <div style={{ fontSize: '14px', color: colors.foreground, marginBottom: '12px', fontWeight: 600 }}>
-              Rename {renameTarget.isDirectory ? 'folder' : 'file'}
-            </div>
-            <div style={{ fontSize: '12px', color: colors.foreground, opacity: 0.7, marginBottom: '8px' }}>
-              Current name: {renameTarget.name}
-            </div>
-            <input
-              data-testid="explorer-rename-input"
-              autoFocus
-              value={renameInput}
-              onChange={e => {
-                setRenameInput(e.target.value);
-                if (renameError) setRenameError(null);
-              }}
-              onKeyDown={e => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  void submitExplorerRename();
-                } else if (e.key === 'Escape') {
-                  e.preventDefault();
-                  closeRenameModal();
-                }
-              }}
+          {/* Rename Modal for Explorer File/Folder */}
+          {renameTarget && (
+            <div
+              data-testid="explorer-rename-modal-backdrop"
+              onClick={closeRenameModal}
               style={{
-                width: '100%',
-                padding: '6px 8px',
-                fontSize: '13px',
-                color: colors.foreground,
-                backgroundColor: colors.tabHover,
-                border: `1px solid ${colors.tabHover}`,
-                borderRadius: '3px',
-                boxSizing: 'border-box',
+                position: 'fixed',
+                inset: 0,
+                zIndex: 10000,
+                backgroundColor: 'rgba(0,0,0,0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
               }}
-            />
-            {renameError && (
+            >
               <div
-                data-testid="explorer-rename-error"
-                style={{ marginTop: '8px', fontSize: '12px', color: '#e06c75' }}
-              >
-                {renameError}
-              </div>
-            )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' }}>
-              <button
-                type="button"
-                data-testid="explorer-rename-cancel"
-                onClick={closeRenameModal}
+                data-testid="explorer-rename-modal"
+                role="dialog"
+                aria-label={`Rename ${renameTarget.isDirectory ? 'folder' : 'file'}`}
+                onClick={e => e.stopPropagation()}
                 style={{
-                  padding: '6px 14px',
-                  fontSize: '13px',
-                  color: colors.foreground,
-                  backgroundColor: 'transparent',
+                  backgroundColor: colors.background,
                   border: `1px solid ${colors.tabHover}`,
-                  borderRadius: '3px',
-                  cursor: 'pointer',
+                  borderRadius: '6px',
+                  padding: '20px 24px',
+                  minWidth: '340px',
+                  boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
                 }}
               >
-                Cancel
-              </button>
-              <button
-                type="button"
-                data-testid="explorer-rename-submit"
-                onClick={() => {
-                  void submitExplorerRename();
-                }}
-                style={{
-                  padding: '6px 14px',
-                  fontSize: '13px',
-                  color: colors.background,
-                  backgroundColor: colors.foreground,
-                  border: `1px solid ${colors.foreground}`,
-                  borderRadius: '3px',
-                  cursor: 'pointer',
-                }}
-              >
-                Rename
-              </button>
+                <div style={{ fontSize: '14px', color: colors.foreground, marginBottom: '12px', fontWeight: 600 }}>
+                  Rename {renameTarget.isDirectory ? 'folder' : 'file'}
+                </div>
+                <div style={{ fontSize: '12px', color: colors.foreground, opacity: 0.7, marginBottom: '8px' }}>
+                  Current name: {renameTarget.name}
+                </div>
+                <input
+                  data-testid="explorer-rename-input"
+                  autoFocus
+                  value={renameInput}
+                  onChange={e => {
+                    setRenameInput(e.target.value);
+                    if (renameError) setRenameError(null);
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void submitExplorerRename();
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      closeRenameModal();
+                    }
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '6px 8px',
+                    fontSize: '13px',
+                    color: colors.foreground,
+                    backgroundColor: colors.tabHover,
+                    border: `1px solid ${colors.tabHover}`,
+                    borderRadius: '3px',
+                    boxSizing: 'border-box',
+                  }}
+                />
+                {renameError && (
+                  <div
+                    data-testid="explorer-rename-error"
+                    style={{ marginTop: '8px', fontSize: '12px', color: '#e06c75' }}
+                  >
+                    {renameError}
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' }}>
+                  <button
+                    type="button"
+                    data-testid="explorer-rename-cancel"
+                    onClick={closeRenameModal}
+                    style={{
+                      padding: '6px 14px',
+                      fontSize: '13px',
+                      color: colors.foreground,
+                      backgroundColor: 'transparent',
+                      border: `1px solid ${colors.tabHover}`,
+                      borderRadius: '3px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="explorer-rename-submit"
+                    onClick={() => {
+                      void submitExplorerRename();
+                    }}
+                    style={{
+                      padding: '6px 14px',
+                      fontSize: '13px',
+                      color: colors.background,
+                      backgroundColor: colors.foreground,
+                      border: `1px solid ${colors.foreground}`,
+                      borderRadius: '3px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Rename
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          )}
 
-      {/* Delete Confirmation Modal for Explorer File/Folder */}
-      {deleteTarget && (
-        <div
-          data-testid="explorer-delete-modal-backdrop"
-          onClick={closeDeleteModal}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 10000,
-            backgroundColor: 'rgba(0,0,0,0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <div
-            data-testid="explorer-delete-modal"
-            role="dialog"
-            aria-label={`Delete ${deleteTarget.isDirectory ? 'folder' : 'file'}`}
-            onClick={e => e.stopPropagation()}
-            style={{
-              backgroundColor: colors.background,
-              border: `1px solid ${colors.tabHover}`,
-              borderRadius: '6px',
-              padding: '20px 24px',
-              minWidth: '340px',
-              maxWidth: '440px',
-              boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
-            }}
-          >
-            <div style={{ fontSize: '14px', color: colors.foreground, marginBottom: '10px', fontWeight: 600 }}>
-              Delete {deleteTarget.isDirectory ? 'Folder' : 'File'}
-            </div>
-            <div style={{ fontSize: '13px', color: colors.foreground, lineHeight: 1.5 }}>
-              Are you sure you want to delete <strong>{deleteTarget.name}</strong>?
-              {deleteTarget.isDirectory && ' All files and subfolders inside it will also be deleted.'}
-            </div>
-            {deleteError && (
+          {/* Delete Confirmation Modal for Explorer File/Folder */}
+          {deleteTarget && (
+            <div
+              data-testid="explorer-delete-modal-backdrop"
+              onClick={closeDeleteModal}
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 10000,
+                backgroundColor: 'rgba(0,0,0,0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
               <div
-                data-testid="explorer-delete-error"
-                style={{ marginTop: '10px', fontSize: '12px', color: '#e06c75' }}
-              >
-                {deleteError}
-              </div>
-            )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '18px' }}>
-              <button
-                type="button"
-                data-testid="explorer-delete-cancel"
-                onClick={closeDeleteModal}
+                data-testid="explorer-delete-modal"
+                role="dialog"
+                aria-label={`Delete ${deleteTarget.isDirectory ? 'folder' : 'file'}`}
+                onClick={e => e.stopPropagation()}
                 style={{
-                  padding: '6px 14px',
-                  fontSize: '13px',
-                  color: colors.foreground,
-                  backgroundColor: 'transparent',
+                  backgroundColor: colors.background,
                   border: `1px solid ${colors.tabHover}`,
-                  borderRadius: '3px',
-                  cursor: 'pointer',
+                  borderRadius: '6px',
+                  padding: '20px 24px',
+                  minWidth: '340px',
+                  maxWidth: '440px',
+                  boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
                 }}
               >
-                Cancel
-              </button>
-              <button
-                type="button"
-                data-testid="explorer-delete-confirm"
-                onClick={() => {
-                  void confirmExplorerDelete();
-                }}
-                style={{
-                  padding: '6px 14px',
-                  fontSize: '13px',
-                  color: '#ffffff',
-                  backgroundColor: '#d9534f',
-                  border: '1px solid #d9534f',
-                  borderRadius: '3px',
-                  cursor: 'pointer',
-                }}
-              >
-                Delete
-              </button>
+                <div style={{ fontSize: '14px', color: colors.foreground, marginBottom: '10px', fontWeight: 600 }}>
+                  Delete {deleteTarget.isDirectory ? 'Folder' : 'File'}
+                </div>
+                <div style={{ fontSize: '13px', color: colors.foreground, lineHeight: 1.5 }}>
+                  Are you sure you want to delete <strong>{deleteTarget.name}</strong>?
+                  {deleteTarget.isDirectory && ' All files and subfolders inside it will also be deleted.'}
+                </div>
+                {deleteError && (
+                  <div
+                    data-testid="explorer-delete-error"
+                    style={{ marginTop: '10px', fontSize: '12px', color: '#e06c75' }}
+                  >
+                    {deleteError}
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '18px' }}>
+                  <button
+                    type="button"
+                    data-testid="explorer-delete-cancel"
+                    onClick={closeDeleteModal}
+                    style={{
+                      padding: '6px 14px',
+                      fontSize: '13px',
+                      color: colors.foreground,
+                      backgroundColor: 'transparent',
+                      border: `1px solid ${colors.tabHover}`,
+                      borderRadius: '3px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="explorer-delete-confirm"
+                    onClick={() => {
+                      void confirmExplorerDelete();
+                    }}
+                    style={{
+                      padding: '6px 14px',
+                      fontSize: '13px',
+                      color: '#ffffff',
+                      backgroundColor: '#d9534f',
+                      border: '1px solid #d9534f',
+                      borderRadius: '3px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          )}
+          {gitActionsElement}
+        </>,
+        document.body,
       )}
     </aside>
   );

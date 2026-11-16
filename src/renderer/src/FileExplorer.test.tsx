@@ -9,6 +9,7 @@ import FileExplorer, {
   getParentDirPath,
   formatOpenEditorSubpath,
   sortFavoriteFolders,
+  clampMenuPosition,
   type ExplorerEntry,
 } from './FileExplorer';
 
@@ -40,6 +41,14 @@ describe('FileExplorer utility functions', () => {
     expect(formatOpenEditorSubpath(null, 'C:\\Projects\\awapi')).toBe('');
   });
 
+  it('clamps popup menus inside the viewport', () => {
+    // Fits: unchanged.
+    expect(clampMenuPosition(100, 100, 200, 150, 1000, 800)).toEqual({ x: 100, y: 100 });
+    // Overflows bottom/right: shifted up/left to keep a 4px margin.
+    expect(clampMenuPosition(900, 750, 200, 150, 1000, 800)).toEqual({ x: 796, y: 646 });
+    // Taller than the viewport: pinned to the top margin.
+    expect(clampMenuPosition(10, 50, 200, 900, 1000, 800)).toEqual({ x: 10, y: 4 });
+  });
   it('sorts favorite folders by folder name case-insensitively with natural numeric ordering', () => {
     expect(
       sortFavoriteFolders([
@@ -659,5 +668,177 @@ describe('FileExplorer component', () => {
     expect(screen.getByTestId('explorer-context-toggle-favorite').textContent).toBe(
       'Remove from Favorites',
     );
+  });
+
+  it('shows TortoiseGit-style overlays and refreshes Git status on directory changes', async () => {
+    const getGitStatus = vi.fn(async () => ({
+      ok: true,
+      repoRoot: '/workspace/awapi-editor',
+      caseInsensitive: false,
+      entries: [
+        { path: 'README.md', status: 'modified' },
+        { path: 'samples/sample.py', status: 'conflicted' },
+      ],
+    }));
+    const watchGitRepo = vi.fn(async () => {});
+    Object.assign((window as any).electronAPI, { getGitStatus, watchGitRepo, onGitRepoChanged: vi.fn(() => () => {}) });
+
+    render(
+      <ThemeProvider>
+        <FileExplorer
+          isOpen={true}
+          rootFolderPath="/workspace/awapi-editor"
+          tabs={[]}
+          activeTabId={null}
+          onSelectTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onOpenFileFromTree={vi.fn()}
+          onPickFolder={vi.fn()}
+          onCloseExplorer={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    const readme = await screen.findByTestId('explorer-file-README.md');
+    await waitFor(() => expect(readme.querySelector('[data-testid="git-badge-modified"]')).toBeTruthy());
+    expect(watchGitRepo).toHaveBeenCalledWith('/workspace/awapi-editor');
+    expect(
+      screen.getByTestId('explorer-file-package.json').querySelector('[data-testid="git-badge-clean"]'),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId('explorer-folder-samples').querySelector('[data-testid="git-badge-conflicted"]'),
+    ).toBeTruthy();
+
+    getGitStatus.mockClear();
+    dirChangeListener?.('/workspace/awapi-editor');
+    await waitFor(() => expect(getGitStatus).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows a Git submenu on folders and the root, and runs Pull from it', async () => {
+    const runGitOperation = vi.fn(async () => ({ ok: true, output: 'Already up to date.' }));
+    Object.assign((window as any).electronAPI, {
+      getGitStatus: vi.fn(async () => ({
+        ok: true,
+        repoRoot: '/workspace/awapi-editor',
+        caseInsensitive: false,
+        entries: [{ path: 'README.md', status: 'modified' }],
+      })),
+      watchGitRepo: vi.fn(async () => {}),
+      onGitRepoChanged: vi.fn(() => () => {}),
+      runGitOperation,
+    });
+
+    render(
+      <ThemeProvider>
+        <FileExplorer
+          isOpen={true}
+          rootFolderPath="/workspace/awapi-editor"
+          tabs={[]}
+          activeTabId={null}
+          onSelectTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onOpenFileFromTree={vi.fn()}
+          onPickFolder={vi.fn()}
+          onCloseExplorer={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    const readme = await screen.findByTestId('explorer-file-README.md');
+    await waitFor(() => expect(readme.querySelector('[data-testid="git-badge-modified"]')).toBeTruthy());
+
+    // File menu only lists commands that apply to a modified file.
+    fireEvent.contextMenu(readme);
+    fireEvent.mouseEnter(screen.getByTestId('explorer-context-git'));
+    expect(screen.getByTestId('explorer-git-diff')).toBeTruthy();
+    expect(screen.queryByTestId('explorer-git-unstage')).toBeNull();
+    fireEvent.click(screen.getByTestId('explorer-context-menu-backdrop'));
+
+    // Empty space of the root opens the menu for the whole folder.
+    fireEvent.contextMenu(screen.getByTestId('explorer-tree'));
+    fireEvent.mouseEnter(screen.getByTestId('explorer-context-git'));
+    expect(screen.queryByTestId('explorer-git-ignore')).toBeNull();
+    fireEvent.click(screen.getByTestId('explorer-git-pull'));
+
+    expect(screen.queryByTestId('explorer-context-menu')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('git-notice').textContent).toContain('Pull completed.'));
+    expect(runGitOperation).toHaveBeenCalledWith({ kind: 'pull', cwd: '/workspace/awapi-editor' });
+    expect(screen.getByTestId('git-notice-output').textContent).toContain('Already up to date.');
+
+    // Dialog commands open a native modal window and report its result in the notice.
+    const openGitDialog = vi.fn(async () => ({ summary: 'Committed.', output: '[main abc] msg' }));
+    (window as any).electronAPI.openGitDialog = openGitDialog;
+    fireEvent.contextMenu(screen.getByTestId('explorer-file-README.md'));
+    fireEvent.mouseEnter(screen.getByTestId('explorer-context-git'));
+    fireEvent.click(screen.getByTestId('explorer-git-commit'));
+    await waitFor(() => expect(screen.getByTestId('git-notice').textContent).toContain('Committed.'));
+    expect(openGitDialog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'commit',
+        target: { path: '/workspace/awapi-editor/README.md', isDirectory: false, isRoot: false, status: 'modified' },
+        isLightTheme: false,
+      }),
+    );
+  });
+
+  it('hides the Git submenu outside a repository', async () => {
+    Object.assign((window as any).electronAPI, {
+      getGitStatus: vi.fn(async () => ({ ok: false, reason: 'not-a-repo' })),
+      watchGitRepo: vi.fn(async () => {}),
+    });
+    render(
+      <ThemeProvider>
+        <FileExplorer
+          isOpen={true}
+          rootFolderPath="/workspace/awapi-editor"
+          tabs={[]}
+          activeTabId={null}
+          onSelectTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onOpenFileFromTree={vi.fn()}
+          onPickFolder={vi.fn()}
+          onCloseExplorer={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+    fireEvent.contextMenu(await screen.findByTestId('explorer-folder-samples'));
+    expect(screen.getByTestId('explorer-context-menu')).toBeTruthy();
+    expect(screen.queryByTestId('explorer-context-git')).toBeNull();
+  });
+
+  it('moves the context menu up when opened near the bottom of the window', async () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const isMenu = this.getAttribute('data-testid') === 'explorer-context-menu';
+      const width = isMenu ? 200 : 0;
+      const height = isMenu ? 160 : 0;
+      return { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height, toJSON: () => ({}) } as DOMRect;
+    });
+    try {
+      render(
+        <ThemeProvider>
+          <FileExplorer
+            isOpen={true}
+            rootFolderPath="/workspace/awapi-editor"
+            tabs={[]}
+            activeTabId={null}
+            onSelectTab={vi.fn()}
+            onCloseTab={vi.fn()}
+            onOpenFileFromTree={vi.fn()}
+            onPickFolder={vi.fn()}
+            onCloseExplorer={vi.fn()}
+          />
+        </ThemeProvider>,
+      );
+      fireEvent.contextMenu(await screen.findByTestId('explorer-file-README.md'), {
+        clientX: 50,
+        clientY: window.innerHeight - 10,
+      });
+      const menu = screen.getByTestId('explorer-context-menu');
+      expect(screen.getByTestId('file-explorer-sidebar').contains(menu)).toBe(false);
+      expect(menu.style.top).toBe(`${window.innerHeight - 160 - 4}px`);
+      expect(menu.style.left).toBe('50px');
+    } finally {
+      rectSpy.mockRestore();
+    }
   });
 });

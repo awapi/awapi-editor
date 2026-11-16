@@ -18,11 +18,32 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-import { dirname, isAbsolute, join } from 'path';
+import { basename, dirname, isAbsolute, join, relative } from 'path';
 import { pathToFileURL } from 'url';
 import * as fs from 'fs';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
 import { checkForUpdates } from './updater';
+import { getGitStatusCoalesced, syncGitRepoWatch, resetGitState, type GitDeps } from './git';
+import {
+  getGitBranches,
+  getGitChanges,
+  getGitCommitDetails,
+  getGitDiff,
+  getGitLog,
+  runGitOperation,
+  type GitCommandDeps,
+} from './gitCommands';
+import type { GitOperation } from '../shared/git';
+import {
+  GIT_DIALOG_MIN_HEIGHT,
+  GIT_DIALOG_MIN_WIDTH,
+  getGitDialogBounds,
+  getGitDialogTitle,
+  normalizeGitDialogRequest,
+  normalizeGitDialogResult,
+  type GitDialogRequest,
+  type GitDialogResult,
+} from '../shared/gitDialog';
 import { ZOOM_STEP, adjustZoom, resetZoom, clearZoomState } from './zoom';
 import {
   GO_TO_LINE_ACCELERATOR,
@@ -273,6 +294,7 @@ function createWindow() {
     watchRegistry.clear();
     clearAllWatchedFiles();
     clearAllWatchedDirs();
+    resetGitState();
     for (const winId of popoutWindowIds) {
       const win = BrowserWindow.fromId(winId);
       win?.destroy();
@@ -567,6 +589,174 @@ ipcMain.handle('explorer:watchDirs', async (_, dirPaths: unknown) => {
       mainWindow.webContents.send('explorer:dirChanged', changedDirPath);
     }
   });
+});
+
+// ── Git Status (File Explorer overlays) ──────────────────────────────────────
+const gitDeps: GitDeps = {
+  platform: process.platform,
+  runGit: (args, cwd, options) =>
+    new Promise((resolve) => {
+      execFile(
+        'git',
+        args,
+        {
+          cwd,
+          windowsHide: true,
+          maxBuffer: 64 * 1024 * 1024,
+          encoding: 'utf8',
+          timeout: options?.timeoutMs ?? 0,
+          env: options?.env ? { ...process.env, ...options.env } : process.env,
+        },
+        (err, stdout, stderr) => {
+          const errCode = (err as NodeJS.ErrnoException | null)?.code as unknown;
+          const code = !err ? 0 : errCode === 'ENOENT' ? null : typeof errCode === 'number' ? errCode : 1;
+          resolve({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
+        },
+      );
+    }),
+  watchDir: (dirPath, onEvent) => {
+    try {
+      const watcher = fs.watch(dirPath, (_eventType, filename) => onEvent(filename ? String(filename) : null));
+      watcher.on('error', () => watcher.close());
+      return watcher;
+    } catch {
+      return null;
+    }
+  },
+};
+
+ipcMain.handle('git:getStatus', async (_, dirPath: unknown) => {
+  if (typeof dirPath !== 'string' || !dirPath.trim()) {
+    return { ok: false, reason: 'error', error: 'Invalid directory path.' };
+  }
+  return getGitStatusCoalesced(dirPath, gitDeps);
+});
+
+ipcMain.handle('git:watchRepo', async (_, dirPath: unknown) => {
+  await syncGitRepoWatch(dirPath, gitDeps, (repoRoot) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('git:repoChanged', repoRoot);
+    }
+  });
+});
+
+const gitCommandDeps: GitCommandDeps = {
+  ...gitDeps,
+  relativePath: relative,
+  isAbsolute,
+  realPath: function canonicalPath(p: string): string {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      // Deleted files: canonicalize the parent and re-append the name.
+      const parent = dirname(p);
+      return parent === p ? p : join(canonicalPath(parent), basename(p));
+    }
+  },
+  readTextFile: (filePath) => {
+    try {
+      return fs.readFileSync(filePath, 'utf8');
+    } catch {
+      return null;
+    }
+  },
+  writeTextFile: (filePath, content) => fs.writeFileSync(filePath, content, 'utf8'),
+};
+
+ipcMain.handle('git:run', async (_, op: GitOperation) => runGitOperation(op, gitCommandDeps));
+ipcMain.handle('git:getChanges', async (_, cwd: unknown, scopePath: unknown) =>
+  getGitChanges(cwd, scopePath, gitCommandDeps),
+);
+ipcMain.handle('git:diff', async (_, cwd: unknown, filePath: unknown, options: unknown) => {
+  const opts = options && typeof options === 'object' ? (options as { revision?: unknown; oldPath?: unknown }) : {};
+  return getGitDiff(cwd, filePath, gitCommandDeps, { revision: opts.revision, oldPath: opts.oldPath });
+});
+ipcMain.handle('git:log', async (_, cwd: unknown, targetPath: unknown, isDirectory: unknown, allBranches: unknown) =>
+  getGitLog(cwd, targetPath, isDirectory, allBranches, gitCommandDeps),
+);
+ipcMain.handle('git:commitDetails', async (_, cwd: unknown, hash: unknown) =>
+  getGitCommitDetails(cwd, hash, gitCommandDeps),
+);
+ipcMain.handle('git:branches', async (_, cwd: unknown) => getGitBranches(cwd, gitCommandDeps));
+
+// ── Git Dialog Windows (Commit, Revert, Diff, Log, Branch) ───────────────────
+// Each dialog is a native window, modal to the window that opened it, so it is
+// movable/resizable by the OS and can never be clipped by the editor layout.
+// (On macOS modal windows become immovable sheets, so there it is a plain child window.)
+interface OpenGitDialog {
+  request: GitDialogRequest;
+  result: GitDialogResult | null;
+  resolve: (result: GitDialogResult | null) => void;
+}
+const openGitDialogs = new Map<number, OpenGitDialog>();
+
+function gitDialogForSender(sender: Electron.WebContents): { win: BrowserWindow; dialog: OpenGitDialog } | null {
+  const win = BrowserWindow.fromWebContents(sender);
+  const dialog = win ? openGitDialogs.get(win.id) : undefined;
+  return win && dialog ? { win, dialog } : null;
+}
+
+/** Opens a Git dialog window; resolves with its result once it closes (null when canceled). */
+ipcMain.handle('gitDialog:open', async (event, raw: unknown) => {
+  const request = normalizeGitDialogRequest(raw);
+  if (!request) return null;
+  const parent = BrowserWindow.fromWebContents(event.sender);
+  const hasParent = !!parent && !parent.isDestroyed();
+  const { x, y, width, height } = getGitDialogBounds(request.kind, hasParent ? parent.getBounds() : null);
+
+  const win = new BrowserWindow({
+    width,
+    height,
+    ...(hasParent ? { x, y, parent, modal: process.platform !== 'darwin' } : {}),
+    minWidth: GIT_DIALOG_MIN_WIDTH,
+    minHeight: GIT_DIALOG_MIN_HEIGHT,
+    show: false,
+    title: getGitDialogTitle(request),
+    icon: join(__dirname, '../../build/icon.png'),
+    backgroundColor: request.colors.background,
+    minimizable: false,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  win.setMenu(null);
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', navEvent => navEvent.preventDefault());
+
+  const winId = win.id;
+  return new Promise<GitDialogResult | null>((resolve) => {
+    openGitDialogs.set(winId, { request, result: null, resolve });
+    win.once('ready-to-show', () => win.show());
+    win.on('closed', () => {
+      const dialog = openGitDialogs.get(winId);
+      openGitDialogs.delete(winId);
+      dialog?.resolve(dialog.result);
+    });
+    const loaded = isDev
+      ? win.loadURL((process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173') + '#git-dialog')
+      : win.loadFile(join(__dirname, '../renderer/index.html'), { hash: 'git-dialog' });
+    loaded.catch(() => {
+      if (!win.isDestroyed()) win.destroy();
+    });
+  });
+});
+
+/** Called by a Git dialog window on mount to learn what to show. */
+ipcMain.handle('gitDialog:getRequest', (event) => gitDialogForSender(event.sender)?.dialog.request ?? null);
+
+/** A Git dialog finished successfully: remember the result for the opener and close. */
+ipcMain.handle('gitDialog:complete', (event, raw: unknown) => {
+  const found = gitDialogForSender(event.sender);
+  if (!found) return;
+  found.dialog.result = normalizeGitDialogResult(raw);
+  found.win.close();
+});
+
+/** Cancel / Close / Escape in a Git dialog window. */
+ipcMain.handle('gitDialog:close', (event) => {
+  gitDialogForSender(event.sender)?.win.close();
 });
 
 // ── Windows Explorer Context Menu ────────────────────────────────────────────

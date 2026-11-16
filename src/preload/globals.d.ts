@@ -8,6 +8,17 @@ import type {
   TerminalPreference,
 } from '../shared/terminal';
 import type { DiagramOpenRequest, DiagramRef, DiagramSyncRequest, DiagramWindowData } from '../shared/diagram';
+import type {
+  GitBranchesResult,
+  GitChangesResult,
+  GitCommandResult,
+  GitCommitDetailsResult,
+  GitDiffResult,
+  GitLogResult,
+  GitOperation,
+  GitStatusResult,
+} from '../shared/git';
+import type { GitDialogRequest, GitDialogResult } from '../shared/gitDialog';
 
 export type { EncodingKind };
 
@@ -133,6 +144,32 @@ declare global {
       ) => Promise<{ ok: true; path: string } | { ok: false; error: string }>;
       syncWatchedDirs: (dirPaths: string[]) => Promise<void>;
       onExplorerDirChanged: (callback: (dirPath: string) => void) => () => void;
+      /** Runs `git status` for the repository containing `dirPath` (File Explorer overlays). */
+      getGitStatus: (dirPath: string) => Promise<GitStatusResult>;
+      /** Watches the `.git` folder of the repository containing `dirPath`; null stops watching. */
+      watchGitRepo: (dirPath: string | null) => Promise<void>;
+      /** Fires when the watched repository's `.git` folder changes (commit, stage, checkout, ...). */
+      onGitRepoChanged: (callback: (repoRoot: string) => void) => () => void;
+      /** Runs one whitelisted Git operation (pull, push, commit, add, revert, ...). */
+      runGitOperation: (op: GitOperation) => Promise<GitCommandResult>;
+      /** Changed files under `scopePath`, or the whole repository when omitted (Commit / Revert dialogs). */
+      getGitChanges: (cwd: string, scopePath?: string) => Promise<GitChangesResult>;
+      /** HEAD vs working-tree contents of `filePath`, or parent vs commit when `options.revision` is set. */
+      getGitDiff: (cwd: string, filePath: string, options?: { revision?: string; oldPath?: string }) => Promise<GitDiffResult>;
+      /** Recent commits touching `targetPath` (`allBranches` = `git log --all`). */
+      getGitLog: (cwd: string, targetPath: string, isDirectory: boolean, allBranches?: boolean) => Promise<GitLogResult>;
+      /** Message and changed files of commit `hash`. */
+      getGitCommitDetails: (cwd: string, hash: string) => Promise<GitCommitDetailsResult>;
+      /** Local and remote-tracking branches of the repository containing `cwd`. */
+      getGitBranches: (cwd: string) => Promise<GitBranchesResult>;
+      /** Opens a Git dialog in a native modal window; resolves with its result, or null when canceled. */
+      openGitDialog: (request: GitDialogRequest) => Promise<GitDialogResult | null>;
+      /** In a Git dialog window: the request it was opened with. */
+      getGitDialogRequest: () => Promise<GitDialogRequest | null>;
+      /** In a Git dialog window: report success to the opener and close. */
+      completeGitDialog: (result: GitDialogResult) => Promise<void>;
+      /** In a Git dialog window: close without a result. */
+      closeGitDialog: () => Promise<void>;
       getContextMenuStatus: () => Promise<{ supported: boolean; enabled: boolean }>;
       setContextMenuEnabled: (
         enable: boolean

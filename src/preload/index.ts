@@ -2,6 +2,17 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { EncodingKind } from '../shared/encodings';
 import type { PtyCreateOptions, PtyCreateResult, PtyDataEvent, PtyExitEvent, TerminalChoices } from '../shared/terminal';
 import type { DiagramOpenRequest, DiagramRef, DiagramSyncRequest, DiagramWindowData } from '../shared/diagram';
+import type {
+  GitBranchesResult,
+  GitChangesResult,
+  GitCommandResult,
+  GitCommitDetailsResult,
+  GitDiffResult,
+  GitLogResult,
+  GitOperation,
+  GitStatusResult,
+} from '../shared/git';
+import type { GitDialogRequest, GitDialogResult } from '../shared/gitDialog';
 
 /** Payload describing one editor tab rendered in a Markdown / HTML preview window. */
 interface MarkdownPreviewPayload {
@@ -72,6 +83,31 @@ export const electronAPI = {
       ipcRenderer.removeListener('explorer:dirChanged', listener);
     };
   },
+  getGitStatus: (dirPath: string) => ipcRenderer.invoke('git:getStatus', dirPath) as Promise<GitStatusResult>,
+  watchGitRepo: (dirPath: string | null) => ipcRenderer.invoke('git:watchRepo', dirPath) as Promise<void>,
+  onGitRepoChanged: (callback: (repoRoot: string) => void) => {
+    const listener = (_: unknown, repoRoot: string) => callback(repoRoot);
+    ipcRenderer.on('git:repoChanged', listener);
+    return () => {
+      ipcRenderer.removeListener('git:repoChanged', listener);
+    };
+  },
+  runGitOperation: (op: GitOperation) => ipcRenderer.invoke('git:run', op) as Promise<GitCommandResult>,
+  getGitChanges: (cwd: string, scopePath?: string) =>
+    ipcRenderer.invoke('git:getChanges', cwd, scopePath) as Promise<GitChangesResult>,
+  getGitDiff: (cwd: string, filePath: string, options?: { revision?: string; oldPath?: string }) =>
+    ipcRenderer.invoke('git:diff', cwd, filePath, options) as Promise<GitDiffResult>,
+  getGitLog: (cwd: string, targetPath: string, isDirectory: boolean, allBranches?: boolean) =>
+    ipcRenderer.invoke('git:log', cwd, targetPath, isDirectory, allBranches) as Promise<GitLogResult>,
+  getGitCommitDetails: (cwd: string, hash: string) =>
+    ipcRenderer.invoke('git:commitDetails', cwd, hash) as Promise<GitCommitDetailsResult>,
+  getGitBranches: (cwd: string) => ipcRenderer.invoke('git:branches', cwd) as Promise<GitBranchesResult>,
+  /** Opens a Git dialog in a native modal window; resolves with its result, or null when canceled. */
+  openGitDialog: (request: GitDialogRequest) =>
+    ipcRenderer.invoke('gitDialog:open', request) as Promise<GitDialogResult | null>,
+  getGitDialogRequest: () => ipcRenderer.invoke('gitDialog:getRequest') as Promise<GitDialogRequest | null>,
+  completeGitDialog: (result: GitDialogResult) => ipcRenderer.invoke('gitDialog:complete', result) as Promise<void>,
+  closeGitDialog: () => ipcRenderer.invoke('gitDialog:close') as Promise<void>,
   getContextMenuStatus: () =>
     ipcRenderer.invoke('contextMenu:getStatus') as Promise<{ supported: boolean; enabled: boolean }>,
   setContextMenuEnabled: (enable: boolean) =>

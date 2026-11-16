@@ -1549,6 +1549,26 @@ const App: React.FC = () => {
     [buildMarkdownPreviewPayload],
   );
 
+  // File path whose preview popup should open once its (pinned) tab is in state.
+  const [pendingExplorerPreviewPath, setPendingExplorerPreviewPath] = useState<string | null>(null);
+
+  const handleOpenPreviewFromExplorer = React.useCallback(
+    async (filePath: string) => {
+      // Pin the tab so a later single-click in the Explorer can't reuse it for another file.
+      await handleOpenFileFromExplorer(filePath, { preview: false });
+      setPendingExplorerPreviewPath(filePath);
+    },
+    [handleOpenFileFromExplorer],
+  );
+
+  useEffect(() => {
+    if (!pendingExplorerPreviewPath) return;
+    setPendingExplorerPreviewPath(null);
+    const norm = normalizePathForCompare(pendingExplorerPreviewPath);
+    const tab = tabs.find(t => t.filePath && normalizePathForCompare(t.filePath) === norm);
+    if (tab) openMarkdownPreviewForTab(tab.id);
+  }, [pendingExplorerPreviewPath, tabs, openMarkdownPreviewForTab]);
+
   // Live-refresh every open preview popup with its own tab's content, title,
   // filePath, theme, and preview support. Previews whose tab was closed are closed too.
   useEffect(() => {
@@ -1939,6 +1959,7 @@ const App: React.FC = () => {
           onPinTab={pinTab}
           onCloseTab={closeTab}
           onOpenFileFromTree={handleOpenFileFromExplorer}
+          onOpenPreviewFromTree={filePath => { void handleOpenPreviewFromExplorer(filePath); }}
           onOpenInIntegratedTerminal={dirPath => { void terminals.createSession(dirPath); }}
           onPickFolder={() => { void handlePickExplorerFolder(); }}
           onCloseExplorer={() => setIsExplorerOpen(false)}

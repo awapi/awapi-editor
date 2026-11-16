@@ -2540,6 +2540,49 @@ describe('Editor Core Tests', () => {
         screen.getAllByText(/sample\.sql/).some(el => el.getAttribute('data-testid')?.startsWith('tab-title-')),
       ).toBe(true);
     });
+
+    it('opens a Markdown file as a pinned tab and shows its preview popup from the Explorer context menu', async () => {
+      const api = (window as any).electronAPI;
+      api.openMarkdownPreview = vi.fn().mockResolvedValue(true);
+      api.updateMarkdownPreview = vi.fn().mockResolvedValue(undefined);
+      api.closeMarkdownPreview = vi.fn().mockResolvedValue(undefined);
+      api.readDirectory = vi.fn(async (dirPath: string) => ({
+        ok: true,
+        dirPath,
+        name: 'docs',
+        entries: [{ name: 'notes.md', path: '/workspace/docs/notes.md', isDirectory: false }],
+      }));
+      api.readFile = vi.fn(async (filePath: string) => ({
+        filePath,
+        content: '# Notes',
+        eol: 'LF',
+        encoding: 'utf-8',
+      }));
+      api.loadSession.mockResolvedValue({
+        activeTabId: 'tab-1',
+        tabs: [
+          { id: 'tab-1', title: 'a.txt', filePath: '/workspace/docs/a.txt', content: '', isDirty: false, eol: 'LF' },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/a\.txt/));
+      fireEvent.contextMenu(screen.getByText(/a\.txt/));
+      fireEvent.click(screen.getByTestId('tab-context-open-folder-in-explorer'));
+      await waitFor(() => expect(screen.getByTestId('explorer-file-notes.md')).toBeTruthy());
+
+      fireEvent.contextMenu(screen.getByTestId('explorer-file-notes.md'));
+      fireEvent.click(screen.getByTestId('explorer-context-open-preview'));
+
+      await waitFor(() => expect(api.openMarkdownPreview).toHaveBeenCalledTimes(1));
+      expect(api.openMarkdownPreview).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'notes.md', filePath: '/workspace/docs/notes.md', content: '# Notes' }),
+      );
+      const notesTitle = screen.getAllByText(/notes\.md/).find(
+        el => el.getAttribute('data-testid')?.startsWith('tab-title-'),
+      ) as HTMLElement;
+      expect(notesTitle.style.fontStyle).toBe('normal');
+    });
   });
 
   describe('Markdown Preview popup integration', () => {

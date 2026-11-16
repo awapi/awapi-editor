@@ -10,6 +10,7 @@ import FileExplorer, {
   formatOpenEditorSubpath,
   sortFavoriteFolders,
   clampMenuPosition,
+  getRelativePath,
   type ExplorerEntry,
 } from './FileExplorer';
 
@@ -39,6 +40,14 @@ describe('FileExplorer utility functions', () => {
     ).toBe('/other/folder');
 
     expect(formatOpenEditorSubpath(null, 'C:\\Projects\\awapi')).toBe('');
+  });
+
+  it('builds paths relative to the root folder, keeping separators and falling back to the full path', () => {
+    expect(getRelativePath('C:\\Projects\\awapi\\src\\App.tsx', 'C:\\Projects\\awapi')).toBe('src\\App.tsx');
+    expect(getRelativePath('/Users/dev/project/src/App.tsx', '/Users/dev/project/')).toBe('src/App.tsx');
+    expect(getRelativePath('/Users/dev/project', '/Users/dev/project')).toBe('.');
+    expect(getRelativePath('/Users/dev/project-other/a.ts', '/Users/dev/project')).toBe('/Users/dev/project-other/a.ts');
+    expect(getRelativePath('/Users/dev/a.ts', null)).toBe('/Users/dev/a.ts');
   });
 
   it('clamps popup menus inside the viewport', () => {
@@ -405,6 +414,82 @@ describe('FileExplorer component', () => {
       expect(screen.queryByTestId('explorer-file-README.md')).toBeNull();
     });
     expect(onItemDeleted).toHaveBeenCalledWith('/workspace/awapi-editor/README.md', false);
+  });
+
+  it('offers Open Markdown Preview only for previewable files in the context menu', async () => {
+    const onOpenPreviewFromTree = vi.fn();
+    render(
+      <ThemeProvider>
+        <FileExplorer
+          isOpen={true}
+          rootFolderPath="/workspace/awapi-editor"
+          tabs={[]}
+          activeTabId={null}
+          onSelectTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onOpenFileFromTree={vi.fn()}
+          onOpenPreviewFromTree={onOpenPreviewFromTree}
+          onPickFolder={vi.fn()}
+          onCloseExplorer={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('explorer-file-README.md')).toBeTruthy();
+    });
+
+    fireEvent.contextMenu(screen.getByTestId('explorer-file-package.json'));
+    expect(screen.queryByTestId('explorer-context-open-preview')).toBeNull();
+    fireEvent.click(screen.getByTestId('explorer-context-menu-backdrop'));
+
+    fireEvent.contextMenu(screen.getByTestId('explorer-folder-samples'));
+    expect(screen.queryByTestId('explorer-context-open-preview')).toBeNull();
+    fireEvent.click(screen.getByTestId('explorer-context-menu-backdrop'));
+
+    fireEvent.contextMenu(screen.getByTestId('explorer-file-README.md'));
+    const item = screen.getByTestId('explorer-context-open-preview');
+    expect(item.textContent).toBe('Open Markdown Preview');
+    fireEvent.click(item);
+    expect(onOpenPreviewFromTree).toHaveBeenCalledWith('/workspace/awapi-editor/README.md');
+    expect(screen.queryByTestId('explorer-context-menu')).toBeNull();
+  });
+
+  it('copies the full and relative path of files and folders to the clipboard from the context menu', async () => {
+    const copyToClipboard = vi.fn(async () => {});
+    (window as any).electronAPI.copyToClipboard = copyToClipboard;
+    render(
+      <ThemeProvider>
+        <FileExplorer
+          isOpen={true}
+          rootFolderPath="/workspace/awapi-editor"
+          tabs={[]}
+          activeTabId={null}
+          onSelectTab={vi.fn()}
+          onCloseTab={vi.fn()}
+          onOpenFileFromTree={vi.fn()}
+          onPickFolder={vi.fn()}
+          onCloseExplorer={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('explorer-folder-samples')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('explorer-folder-samples'));
+    await waitFor(() => expect(screen.getByTestId('explorer-file-sample.py')).toBeTruthy());
+
+    fireEvent.contextMenu(screen.getByTestId('explorer-file-sample.py'));
+    fireEvent.click(screen.getByTestId('explorer-context-copy-path'));
+    expect(copyToClipboard).toHaveBeenLastCalledWith('/workspace/awapi-editor/samples/sample.py');
+    expect(screen.queryByTestId('explorer-context-menu')).toBeNull();
+
+    fireEvent.contextMenu(screen.getByTestId('explorer-file-sample.py'));
+    fireEvent.click(screen.getByTestId('explorer-context-copy-relative-path'));
+    expect(copyToClipboard).toHaveBeenLastCalledWith('samples/sample.py');
+
+    fireEvent.contextMenu(screen.getByTestId('explorer-folder-samples'));
+    fireEvent.click(screen.getByTestId('explorer-context-copy-relative-path'));
+    expect(copyToClipboard).toHaveBeenLastCalledWith('samples');
   });
 
   it('renames and opens the delete confirmation for the focused tree item with keyboard shortcuts', async () => {

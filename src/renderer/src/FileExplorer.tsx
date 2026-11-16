@@ -9,6 +9,7 @@ import { getGitStatusForPath } from '../../shared/git';
 import { GitSubmenu } from './GitSubmenu';
 import { useGitActions } from './useGitActions';
 import type { GitMenuAction, GitTarget } from './gitMenu';
+import { isHtmlTab, isPreviewableTab } from './markdown';
 
 export interface ExplorerEntry {
   name: string;
@@ -33,6 +34,8 @@ interface FileExplorerProps {
   onPinTab?: (tabId: string) => void;
   onCloseTab: (e: React.MouseEvent, tabId: string) => void;
   onOpenFileFromTree: (filePath: string, options?: { preview?: boolean }) => void;
+  /** Opens a Markdown/HTML file and shows its live Preview popup window. */
+  onOpenPreviewFromTree?: (filePath: string) => void;
   onOpenInIntegratedTerminal?: (dirPath: string) => void;
   onPickFolder: () => void;
   onCloseExplorer: () => void;
@@ -142,6 +145,20 @@ export function formatOpenEditorSubpath(
 }
 
 /**
+ * Returns `targetPath` relative to `rootFolderPath` using the target's separator style,
+ * or the full path when it is outside the root (or no root is set).
+ */
+export function getRelativePath(targetPath: string, rootFolderPath: string | null): string {
+  if (!rootFolderPath) return targetPath;
+  const normTarget = normalizePathForCompare(targetPath);
+  const normRoot = normalizePathForCompare(rootFolderPath);
+  if (normTarget === normRoot) return '.';
+  if (!normTarget.startsWith(normRoot + '/')) return targetPath;
+  const rel = normTarget.slice(normRoot.length + 1);
+  return targetPath.includes('\\') ? rel.replace(/\//g, '\\') : rel;
+}
+
+/**
  * Sorts favorite folder paths alphabetically by folder basename
  * (case-insensitive with natural numeric ordering, falling back to full path).
  */
@@ -166,6 +183,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
   onPinTab,
   onCloseTab,
   onOpenFileFromTree,
+  onOpenPreviewFromTree,
   onOpenInIntegratedTerminal,
   onPickFolder,
   onCloseExplorer,
@@ -537,6 +555,25 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
     closeCreateModal();
   };
 
+  const handleOpenPreviewFromContextMenu = () => {
+    if (!contextMenu?.entry || contextMenu.entry.isDirectory) return;
+    const { entry } = contextMenu;
+    setContextMenu(null);
+    onOpenPreviewFromTree?.(entry.path);
+  };
+
+  const handleCopyPathFromContextMenu = (relative: boolean) => {
+    if (!contextMenu?.entry) return;
+    const { entry } = contextMenu;
+    setContextMenu(null);
+    const text = relative ? getRelativePath(entry.path, rootFolderPath) : entry.path;
+    const w = window as Window & { electronAPI?: { copyToClipboard?: (text: string) => Promise<void> } };
+    const write = w.electronAPI?.copyToClipboard
+      ? w.electronAPI.copyToClipboard(text)
+      : navigator.clipboard?.writeText(text);
+    Promise.resolve(write).catch(err => console.error('Failed to copy path:', err));
+  };
+
   const handleOpenFolderFromContextMenu = () => {
     if (!contextMenu?.entry) return;
     const { entry } = contextMenu;
@@ -789,7 +826,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
                 display: 'flex',
                 alignItems: 'center',
                 gap: '5px',
-                padding: '3px 8px',
+                padding: '4px 8px',
                 paddingLeft: `${10 + depth * 14}px`,
                 cursor: 'pointer',
                 fontSize: '13px',
@@ -896,7 +933,7 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
-            padding: '3px 8px',
+            padding: '4px 8px',
             paddingLeft: `${10 + depth * 14 + 19}px`,
             cursor: 'pointer',
             fontSize: '13px',
@@ -1571,6 +1608,40 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
                   padding: '4px 0',
                 }}
               >
+                {onOpenPreviewFromTree &&
+                  contextMenu.entry &&
+                  !contextMenu.entry.isDirectory &&
+                  isPreviewableTab(contextMenu.entry.name) && (
+                    <>
+                      <div
+                        role="menuitem"
+                        data-testid="explorer-context-open-preview"
+                        onClick={handleOpenPreviewFromContextMenu}
+                        onMouseEnter={e => {
+                          (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
+                        }}
+                        onMouseLeave={e => {
+                          (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+                        }}
+                        style={{
+                          padding: '7px 14px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          color: colors.foreground,
+                          backgroundColor: 'transparent',
+                        }}
+                      >
+                        {isHtmlTab(contextMenu.entry.name) ? 'Open HTML Preview' : 'Open Markdown Preview'}
+                      </div>
+                      <div
+                        style={{
+                          height: '1px',
+                          margin: '4px 0',
+                          backgroundColor: colors.tabHover,
+                        }}
+                      />
+                    </>
+                  )}
                 <div
                   role="menuitem"
                   data-testid="explorer-context-open-terminal"
@@ -1721,6 +1792,53 @@ const FileExplorer: React.FC<FileExplorerProps> = ({
                 )}
                 {contextMenu.entry && (
                   <>
+                    <div
+                      role="menuitem"
+                      data-testid="explorer-context-copy-path"
+                      onClick={() => handleCopyPathFromContextMenu(false)}
+                      onMouseEnter={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
+                      }}
+                      onMouseLeave={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        padding: '7px 14px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: colors.foreground,
+                        backgroundColor: 'transparent',
+                      }}
+                    >
+                      Copy Path
+                    </div>
+                    <div
+                      role="menuitem"
+                      data-testid="explorer-context-copy-relative-path"
+                      onClick={() => handleCopyPathFromContextMenu(true)}
+                      onMouseEnter={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = colors.tabHover;
+                      }}
+                      onMouseLeave={e => {
+                        (e.currentTarget as HTMLDivElement).style.backgroundColor = 'transparent';
+                      }}
+                      style={{
+                        padding: '7px 14px',
+                        cursor: 'pointer',
+                        fontSize: '13px',
+                        color: colors.foreground,
+                        backgroundColor: 'transparent',
+                      }}
+                    >
+                      Copy Relative Path
+                    </div>
+                    <div
+                      style={{
+                        height: '1px',
+                        margin: '4px 0',
+                        backgroundColor: colors.tabHover,
+                      }}
+                    />
                     <div
                       role="menuitem"
                       data-testid="explorer-context-rename"

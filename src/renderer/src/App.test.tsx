@@ -2806,6 +2806,72 @@ describe('Editor Core Tests', () => {
       const contextItem = screen.getByTestId('tab-context-markdown-preview');
       expect(contextItem.textContent).toContain('Open HTML Preview');
     });
+
+    it('"Preview only" shows the rendered preview instead of the text editor for all Markdown/HTML tabs', async () => {
+      const api = (window as any).electronAPI;
+      let findCb: (() => void) | undefined;
+      api.onFind = vi.fn((cb: () => void) => {
+        findCb = cb;
+      });
+      api.readFile = vi.fn(async (filePath: string) => ({
+        filePath,
+        content: filePath.endsWith('README.md')
+          ? '# Hello Preview'
+          : filePath.endsWith('guide.md')
+            ? '# Guide'
+            : 'console.log(1);',
+        eol: 'LF',
+        encoding: 'utf-8',
+      }));
+      api.loadSession.mockResolvedValue({
+        activeTabId: 'tab-md',
+        tabs: [
+          { id: 'tab-md', title: 'README.md', filePath: '/workspace/README.md', content: '# Hello Preview', isDirty: false, eol: 'LF' },
+          { id: 'tab-js', title: 'index.js', filePath: '/workspace/index.js', content: 'console.log(1);', isDirty: false, eol: 'LF' },
+          { id: 'tab-guide', title: 'guide.md', filePath: '/workspace/guide.md', content: '# Guide', isDirty: false, eol: 'LF' },
+        ],
+      });
+
+      render(<ThemeProvider><App /></ThemeProvider>);
+      await waitFor(() => screen.getByText(/README\.md/));
+
+      expect(screen.queryByTestId('inline-markdown-preview')).toBeNull();
+      const checkbox = screen.getByTestId('preview-only-checkbox') as HTMLInputElement;
+      expect(checkbox.checked).toBe(false);
+
+      fireEvent.click(checkbox);
+      expect((screen.getByTestId('preview-only-checkbox') as HTMLInputElement).checked).toBe(true);
+      const inline = screen.getByTestId('inline-markdown-preview');
+      expect(inline.querySelector('h1')?.textContent).toBe('Hello Preview');
+      // Popup-only controls are not shown inline
+      expect(screen.queryByTestId('markdown-preview-pin-toggle')).toBeNull();
+      // The popup Preview button is redundant while the inline preview is shown
+      expect(screen.queryByTestId('markdown-preview-button')).toBeNull();
+
+      // Menu Find searches the preview instead of the hidden Monaco editor
+      act(() => {
+        findCb?.();
+      });
+      await waitFor(() => expect(screen.getByTestId('preview-find-input')).toBeTruthy());
+      expect(mockEditorInstance.getAction).not.toHaveBeenCalledWith('actions.find');
+
+      // The setting applies to every Markdown/HTML tab; other tabs show no toggle and the normal editor
+      fireEvent.click(screen.getByText(/index\.js/));
+      expect(screen.queryByTestId('preview-only-toggle')).toBeNull();
+      expect(screen.queryByTestId('inline-markdown-preview')).toBeNull();
+
+      fireEvent.click(screen.getByText(/guide\.md/));
+      expect((screen.getByTestId('preview-only-checkbox') as HTMLInputElement).checked).toBe(true);
+      expect(screen.getByTestId('inline-markdown-preview').querySelector('h1')?.textContent).toBe('Guide');
+
+      fireEvent.click(screen.getByText(/README\.md/));
+      expect(screen.getByTestId('inline-markdown-preview').querySelector('h1')?.textContent).toBe('Hello Preview');
+      fireEvent.click(screen.getByTestId('preview-only-checkbox'));
+      expect(screen.queryByTestId('inline-markdown-preview')).toBeNull();
+      expect(screen.getByTestId('markdown-preview-button')).toBeTruthy();
+      fireEvent.click(screen.getByText(/guide\.md/));
+      expect(screen.queryByTestId('inline-markdown-preview')).toBeNull();
+    });
   });
 
   describe('Image Viewer and SVG Preview / Code View', () => {

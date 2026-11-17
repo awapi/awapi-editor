@@ -272,6 +272,25 @@ if (!gotLock) {
   });
 }
 
+/**
+ * Opens http/https/mailto links in the OS default browser and never lets the
+ * window open child windows or navigate to them (used by windows that render previews).
+ */
+function routeExternalLinksToBrowser(webContents: Electron.WebContents): void {
+  webContents.setWindowOpenHandler(({ url }) => {
+    if (/^(?:https?:|mailto:)/i.test(url)) {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+  webContents.on('will-navigate', (navEvent, url) => {
+    if (/^(?:https?:|mailto:)/i.test(url)) {
+      navEvent.preventDefault();
+      void shell.openExternal(url);
+    }
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1024,
@@ -283,6 +302,8 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  // The inline "Preview only" view can contain external links.
+  routeExternalLinksToBrowser(mainWindow.webContents);
 
   // Close all popout windows when the main window is closed. Pop-out tabs are
   // not part of the session, so dirty pop-outs are asked to save first.
@@ -1358,6 +1379,7 @@ ipcMain.handle('window:popout', async (_event, tabData: PopoutTabData) => {
 
   // Give the popout its own trimmed menu (no Quit, no New/Open, no Preferences).
   popoutWin.setMenu(buildPopoutMenu(popoutWin));
+  routeExternalLinksToBrowser(popoutWin.webContents);
 
   // Store the tab data; the renderer will fetch it via 'popout:get-data' once mounted.
   popoutDataMap.set(popoutWin.id, tabData);
@@ -1650,18 +1672,7 @@ ipcMain.handle('markdown:openPreview', async (event, rawData: unknown) => {
   });
 
   // Open external http/https/mailto links in the OS default browser rather than navigating the popup
-  previewWin.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^(?:https?:|mailto:)/i.test(url)) {
-      void shell.openExternal(url);
-    }
-    return { action: 'deny' };
-  });
-  previewWin.webContents.on('will-navigate', (navEvent, url) => {
-    if (/^(?:https?:|mailto:)/i.test(url)) {
-      navEvent.preventDefault();
-      void shell.openExternal(url);
-    }
-  });
+  routeExternalLinksToBrowser(previewWin.webContents);
 
   previewWin.on('close', () => {
     forgetMarkdownPreviewWindow(previewWinId);
@@ -1748,16 +1759,22 @@ ipcMain.handle('markdown:openFileInEditor', (_event, filePath: unknown) => {
 });
 
 // ── Mermaid diagram pop-out windows ───────────────────────────────────────────
-// Opened from a Markdown preview window, which owns them: they receive only the
-// SVG the preview already rendered in its Mermaid sandbox and display it as an
-// inert <img>. They close with their preview, or when their diagram disappears.
+// Opened from a Markdown preview (a preview popup, or the inline "Preview only"
+// view of an editor window), which owns them: they receive only the SVG the
+// preview already rendered in its Mermaid sandbox and display it as an inert
+// <img>. They close with their owner, or when their diagram disappears.
 const diagramWindowManager = createDiagramWindowManager();
 const diagramOwnersWithCleanup = new Set<number>();
 
-/** Diagram IPC is only accepted from Markdown preview windows. */
-function isPreviewWindowSender(sender: Electron.WebContents): boolean {
+/** Diagram IPC is only accepted from windows that render Markdown previews. */
+function isDiagramOwnerSender(sender: Electron.WebContents): boolean {
   const win = BrowserWindow.fromWebContents(sender);
-  return !!win && markdownPreviewManager.isPreviewWindow(win.id);
+  if (!win) return false;
+  return (
+    markdownPreviewManager.isPreviewWindow(win.id) ||
+    win === mainWindow ||
+    popoutWindowIds.has(win.id)
+  );
 }
 
 function broadcastDiagramPopouts(ownerId: number): void {
@@ -1803,7 +1820,7 @@ function buildDiagramWindowMenu(win: BrowserWindow): Electron.Menu {
 /** Opens (or focuses and refreshes) the pop-out for one diagram of the sender preview. */
 ipcMain.handle('diagram:open', async (event, raw: unknown) => {
   const owner = event.sender;
-  if (!isPreviewWindowSender(owner)) return false;
+  if (!isDiagramOwnerSender(owner)) return false;
   const request = normalizeDiagramOpenRequest(raw);
   if (!request) return false;
 
@@ -1859,9 +1876,9 @@ ipcMain.handle('diagram:open', async (event, raw: unknown) => {
   return true;
 });
 
-/** Live updates from a preview window for the diagram pop-outs it owns. */
+/** Live updates from a preview for the diagram pop-outs it owns. */
 ipcMain.handle('diagram:sync', (event, raw: unknown) => {
-  if (!isPreviewWindowSender(event.sender)) return;
+  if (!isDiagramOwnerSender(event.sender)) return;
   const request = normalizeDiagramSyncRequest(raw);
   if (!request) return;
   const { updates, close } = diagramWindowManager.applySync(event.sender.id, request);
@@ -1876,9 +1893,9 @@ ipcMain.handle('diagram:getData', (event) => {
   return win ? diagramWindowManager.getData(win.id) : null;
 });
 
-/** Diagrams of the sender preview window that currently have a pop-out open. */
+/** Diagrams of the sender preview that currently have a pop-out open. */
 ipcMain.handle('diagram:getOpenPopouts', (event) => {
-  return isPreviewWindowSender(event.sender) ? diagramWindowManager.getOpenRefs(event.sender.id) : [];
+  return isDiagramOwnerSender(event.sender) ? diagramWindowManager.getOpenRefs(event.sender.id) : [];
 });
 /**
  * Refreshes the menus that show `win`'s Always on Top state: the pop-out's own

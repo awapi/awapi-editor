@@ -54,6 +54,40 @@ describe('MarkdownPreviewWindow', () => {
     expect(contentEl.innerHTML).toContain('<strong>Awapi</strong>');
   });
 
+  it('embedded mode renders the given payload without popup IPC or pinning', () => {
+    api.onFind = vi.fn();
+    document.title = 'Awapi Editor';
+    const payload: MarkdownPreviewPayload = {
+      title: 'notes.md',
+      filePath: '/project/notes.md',
+      content: '# Inline',
+      theme: 'dark',
+    };
+    const { rerender } = render(
+      <ThemeProvider>
+        <MarkdownPreviewWindow embedded payload={payload} findRequest={0} />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByTestId('inline-markdown-preview')).toBeTruthy();
+    expect(screen.getByTestId('markdown-preview-content').innerHTML).toContain('Inline</h1>');
+    expect(screen.queryByTestId('markdown-preview-pin-toggle')).toBeNull();
+    expect(api.getMarkdownPreviewData).not.toHaveBeenCalled();
+    expect(api.onMarkdownPreviewUpdate).not.toHaveBeenCalled();
+    expect(api.onFind).not.toHaveBeenCalled();
+    expect(document.title).toBe('Awapi Editor');
+    expect(screen.queryByTestId('preview-find-input')).toBeNull();
+
+    // Live content comes from props; bumping findRequest opens the find bar
+    rerender(
+      <ThemeProvider>
+        <MarkdownPreviewWindow embedded payload={{ ...payload, content: '# Edited' }} findRequest={1} />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('markdown-preview-content').innerHTML).toContain('Edited</h1>');
+    expect(screen.getByTestId('preview-find-input')).toBeTruthy();
+  });
+
   it('refreshes live when onMarkdownPreviewUpdate fires', async () => {
     render(
       <ThemeProvider>
@@ -186,6 +220,57 @@ describe('MarkdownPreviewWindow', () => {
       docKey: '/project/diagram.md',
       count: 0,
       theme: 'dark',
+      updates: [],
+    });
+  });
+
+  it('embedded mode pops out diagrams and closes its pop-outs when unmounted', async () => {
+    vi.mocked(renderMermaidDiagram).mockImplementation(async code => ({
+      ok: true,
+      svg: `<svg data-src="${code}"/>`,
+    }));
+    let popoutsChanged: ((refs: Array<{ docKey: string; index: number }>) => void) | undefined;
+    api.getOpenDiagramPopouts = vi.fn().mockResolvedValue([]);
+    api.onDiagramPopoutsChanged = vi.fn(cb => {
+      popoutsChanged = cb;
+      return () => {};
+    });
+    api.openDiagramPopout = vi.fn().mockResolvedValue(true);
+    api.syncDiagramPopouts = vi.fn().mockResolvedValue(undefined);
+
+    const { unmount } = render(
+      <ThemeProvider>
+        <MarkdownPreviewWindow
+          embedded
+          payload={{
+            title: 'inline.md',
+            filePath: '/project/inline.md',
+            content: '```mermaid\ngraph TD; A-->B\n```',
+            theme: 'light',
+          }}
+        />
+      </ThemeProvider>,
+    );
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-mermaid-action="popout"]')).not.toBeNull(),
+    );
+    fireEvent.click(document.querySelector('[data-mermaid-action="popout"]')!);
+    expect(api.openDiagramPopout).toHaveBeenCalledWith({
+      docKey: '/project/inline.md',
+      index: 0,
+      title: 'inline.md',
+      theme: 'light',
+      svg: '<svg data-src="graph TD; A-->B"/>',
+      error: null,
+    });
+
+    act(() => popoutsChanged!([{ docKey: '/project/inline.md', index: 0 }]));
+    unmount();
+    expect(api.syncDiagramPopouts).toHaveBeenLastCalledWith({
+      docKey: '/project/inline.md',
+      count: 0,
+      theme: 'light',
       updates: [],
     });
   });

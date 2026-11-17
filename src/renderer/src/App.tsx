@@ -34,6 +34,7 @@ import TerminalPanel from './TerminalPanel';
 import { useTerminalSessions } from './useTerminalSessions';
 import { isNewTerminalShortcut, isToggleTerminalShortcut } from './terminalKeys';
 import FileExplorer, { getParentDirPath, normalizePathForCompare } from './FileExplorer';
+import MarkdownPreviewWindow from './MarkdownPreviewWindow';
 
 /** True when this window was opened via "Pop out to new window" (single-file view). */
 const isPopoutMode = typeof window !== 'undefined' && window.location.hash === '#popout';
@@ -91,6 +92,11 @@ const App: React.FC = () => {
   const [isExplorerOpen, setIsExplorerOpen] = useState(false);
   // Tabs of this window that currently have their own preview popup open.
   const [openPreviewTabIds, setOpenPreviewTabIds] = useState<string[]>([]);
+  // "Preview only": every Markdown/HTML tab shows its rendered preview instead of the text editor.
+  const [previewOnlyMode, setPreviewOnlyMode] = useState(false);
+  // Bumped by the Find menu while the active tab is shown in "Preview only" mode.
+  const [previewFindRequest, setPreviewFindRequest] = useState(0);
+  const isActiveTabPreviewOnlyRef = React.useRef(false);
   const [explorerFolderPath, setExplorerFolderPath] = useState<string | null>(null);
   const [favoriteFolders, setFavoriteFolders] = useState<string[]>([]);
   const [explorerRefreshToken, setExplorerRefreshToken] = useState(0);
@@ -802,6 +808,10 @@ const App: React.FC = () => {
       });
 
       w.electronAPI.onFind(() => {
+        if (isActiveTabPreviewOnlyRef.current) {
+          setPreviewFindRequest(n => n + 1);
+          return;
+        }
         if (editorRef.current) {
           editorRef.current.getAction('actions.find').run();
         }
@@ -1483,6 +1493,10 @@ const App: React.FC = () => {
     ? isHtmlTab(activeTab.filePath ?? activeTab.title, effectiveLanguage)
     : false;
   const isActiveTabPreviewable = isActiveTabMarkdown || isActiveTabHtml;
+  // Preview-only replaces the single editor view; split and diff views always show text.
+  const isActiveTabPreviewOnly =
+    previewOnlyMode && isActiveTabPreviewable && (isPopoutMode || viewMode === 'single');
+  isActiveTabPreviewOnlyRef.current = isActiveTabPreviewOnly;
   const isActiveTabRasterImage = activeTab
     ? isRasterImagePath(activeTab.filePath ?? activeTab.title)
     : false;
@@ -1604,6 +1618,45 @@ const App: React.FC = () => {
     if (!activeTabId) return;
     setTabs(prev => prev.map(t => (t.id === activeTabId ? { ...t, imageViewMode: mode } : t)));
   };
+
+  const togglePreviewOnlyMode = () => setPreviewOnlyMode(prev => !prev);
+
+  const renderPreviewOnlyToggle = (height: string) => (
+    <label
+      data-testid="preview-only-toggle"
+      title={
+        viewMode !== 'single' && !isPopoutMode
+          ? 'Preview only applies to the single editor view'
+          : 'Show the rendered preview instead of the text editor for all Markdown and HTML files'
+      }
+      style={{
+        height,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        padding: '0 8px',
+        cursor: 'pointer',
+        borderRadius: '4px',
+        border: `1px solid ${colors.tabHover}`,
+        backgroundColor: previewOnlyMode ? colors.tabActiveBackground : colors.tabBackground,
+        color: colors.foreground,
+        opacity: previewOnlyMode ? 1 : 0.85,
+        fontSize: '11px',
+        fontWeight: 600,
+        flexShrink: 0,
+        userSelect: 'none',
+      }}
+    >
+      <input
+        type="checkbox"
+        data-testid="preview-only-checkbox"
+        checked={previewOnlyMode}
+        onChange={togglePreviewOnlyMode}
+        style={{ margin: 0, cursor: 'pointer' }}
+      />
+      <span>Preview only</span>
+    </label>
+  );
 
   const secondaryInferredLanguage = secondaryTab
     ? inferLanguageFromFilename(secondaryTab.filePath ?? secondaryTab.title)
@@ -2142,7 +2195,7 @@ const App: React.FC = () => {
               <line x1="8" y1="2.5" x2="8" y2="13.5" />
             </svg>
           </button>
-          {activeTab && isActiveTabPreviewable && (
+          {activeTab && isActiveTabPreviewable && !isActiveTabPreviewOnly && (
             <button
               data-testid="markdown-preview-button"
               aria-label={isActiveTabHtml ? 'Open HTML Preview' : 'Open Markdown Preview'}
@@ -2183,6 +2236,7 @@ const App: React.FC = () => {
               <span>Preview</span>
             </button>
           )}
+          {activeTab && isActiveTabPreviewable && renderPreviewOnlyToggle('24px')}
         </div>
       </div>
       )} {/* end !isPopoutMode tab bar */}
@@ -2216,6 +2270,8 @@ const App: React.FC = () => {
             )}
           </div>
           {isActiveTabPreviewable && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+            {!isActiveTabPreviewOnly && (
             <button
               data-testid="markdown-preview-button"
               aria-label={isActiveTabHtml ? 'Open HTML Preview' : 'Open Markdown Preview'}
@@ -2240,6 +2296,9 @@ const App: React.FC = () => {
             >
               Preview
             </button>
+            )}
+            {renderPreviewOnlyToggle('22px')}
+            </div>
           )}
         </div>
       )}
@@ -2506,6 +2565,13 @@ const App: React.FC = () => {
                 />
               ) : null}
             </div>
+          ) : isActiveTabPreviewOnly ? (
+            <MarkdownPreviewWindow
+              key={activeTab.id}
+              embedded
+              payload={buildMarkdownPreviewPayload(activeTab)}
+              findRequest={previewFindRequest}
+            />
           ) : isActiveTabImagePreview ? (
             <ImageViewer
               filePath={activeTab.filePath}

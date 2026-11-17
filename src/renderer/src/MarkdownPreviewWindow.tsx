@@ -54,13 +54,32 @@ function isSameFilePath(a: string | null, b: string): boolean {
   return /^[a-zA-Z]:/.test(b) ? norm(a).toLowerCase() === norm(b).toLowerCase() : norm(a) === norm(b);
 }
 
-const MarkdownPreviewWindow: React.FC = () => {
+export interface MarkdownPreviewWindowProps {
+  /**
+   * Renders the preview inline inside the editor window ("Preview only" mode) instead of as
+   * a popup: the content comes from `payload`, and popup-only features (pinning, document
+   * title, menu Find) are disabled.
+   */
+  embedded?: boolean;
+  /** Live content shown when embedded; ignored by the popup, which receives it over IPC. */
+  payload?: MarkdownPreviewPayload;
+  /** Embedded only: opens the find bar each time this number changes (e.g. from the Find menu). */
+  findRequest?: number;
+}
+
+const MarkdownPreviewWindow: React.FC<MarkdownPreviewWindowProps> = ({
+  embedded = false,
+  payload: embeddedPayload,
+  findRequest,
+}) => {
   const { currentTheme, colors } = useTheme();
-  const [livePayload, setLivePayload] = useState<MarkdownPreviewPayload>({
+  const [ipcPayload, setLivePayload] = useState<MarkdownPreviewPayload>({
     title: 'Markdown Preview',
     filePath: null,
     content: '',
   });
+  const livePayload: MarkdownPreviewPayload =
+    embedded && embeddedPayload ? embeddedPayload : ipcPayload;
   // Files reached by clicking links; the last entry is shown instead of the live tab content.
   const [navStack, setNavStack] = useState<MarkdownPreviewPayload[]>([]);
   const [navError, setNavError] = useState<string | null>(null);
@@ -84,6 +103,7 @@ const MarkdownPreviewWindow: React.FC = () => {
   const isNavigated = topEntry !== null;
 
   useEffect(() => {
+    if (embedded) return;
     const w = window as any;
     let isMounted = true;
 
@@ -121,13 +141,13 @@ const MarkdownPreviewWindow: React.FC = () => {
       isMounted = false;
       if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, []);
+  }, [embedded]);
 
   useEffect(() => {
-    if (typeof document !== 'undefined') {
+    if (!embedded && typeof document !== 'undefined') {
       document.title = payload.title ? `Preview — ${payload.title}` : 'Markdown Preview';
     }
-  }, [payload.title]);
+  }, [embedded, payload.title]);
 
   const effectiveMode: 'light' | 'dark' =
     payload.theme ?? (currentTheme === 'light' ? 'light' : 'dark');
@@ -181,8 +201,14 @@ const MarkdownPreviewWindow: React.FC = () => {
     return () => {
       isMounted = false;
       if (typeof unsubscribe === 'function') unsubscribe();
+      // An inline preview unmounts when its editor window switches tabs or leaves "Preview only";
+      // its diagrams are gone, so close their pop-outs rather than leave them stale.
+      if (embedded && openDiagramPopouts.current.length > 0) {
+        const { docKey, theme } = diagramContext.current;
+        void api?.syncDiagramPopouts?.({ docKey, count: 0, theme, updates: [] });
+      }
     };
-  }, []);
+  }, [embedded]);
 
   /** Pushes re-rendered diagrams to open pop-outs; the main process closes ones whose diagram is gone. */
   const syncDiagramPopouts = useCallback(
@@ -411,14 +437,24 @@ const MarkdownPreviewWindow: React.FC = () => {
       if (isPreviewFindShortcut(e) && handleFindShortcutRef.current(e)) e.preventDefault();
     };
     window.addEventListener('keydown', onKeyDown);
-    const unsubscribe = (window as any).electronAPI?.onFind?.(() =>
-      handleFindShortcutRef.current({ key: 'f', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false }),
-    );
+    // Embedded previews get menu Find via `findRequest`; the host window owns onFind.
+    const unsubscribe = embedded
+      ? undefined
+      : (window as any).electronAPI?.onFind?.(() =>
+          handleFindShortcutRef.current({ key: 'f', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false }),
+        );
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, []);
+  }, [embedded]);
+
+  const lastFindRequest = useRef(findRequest);
+  useEffect(() => {
+    if (findRequest === lastFindRequest.current) return;
+    lastFindRequest.current = findRequest;
+    handleFindShortcutRef.current({ key: 'f', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false });
+  }, [findRequest]);
 
   const scrollToFragment = useCallback((id: string) => {
     const el =
@@ -767,11 +803,11 @@ const MarkdownPreviewWindow: React.FC = () => {
 
   return (
     <div
-      data-testid="markdown-preview-window"
+      data-testid={embedded ? 'inline-markdown-preview' : 'markdown-preview-window'}
       style={{
         display: 'flex',
         flexDirection: 'column',
-        height: '100vh',
+        height: embedded ? '100%' : '100vh',
         backgroundColor: pageBg,
         color: pageFg,
       }}
@@ -911,6 +947,7 @@ const MarkdownPreviewWindow: React.FC = () => {
             <line x1="10.5" y1="10.5" x2="14" y2="14" />
           </svg>
         </button>
+        {!embedded && (
         <button
           data-testid="markdown-preview-pin-toggle"
           aria-label={alwaysOnTop ? 'Unpin Preview Window' : 'Pin Preview Window Always on Top'}
@@ -949,6 +986,7 @@ const MarkdownPreviewWindow: React.FC = () => {
             <line x1="8" y1="9.5" x2="8" y2="14" />
           </svg>
         </button>
+        )}
         </div>
       </div>
 

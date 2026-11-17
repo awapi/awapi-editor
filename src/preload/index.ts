@@ -255,16 +255,16 @@ export const electronAPI = {
   onMarkdownPreviewVisibilityChanged: (callback: (openTabIds: string[]) => void) =>
     ipcRenderer.on('markdown:previewVisibilityChanged', (_, openTabIds: string[]) => callback(openTabIds)),
 
-  // Mermaid diagram pop-outs (opened from and owned by a Markdown preview window)
-  /** Preview only: opens or focuses the pop-out for one rendered diagram. */
+  // Mermaid diagram pop-outs (opened from and owned by a Markdown preview: a preview popup or an editor window's inline "Preview only" view)
+  /** Markdown previews (popup or inline): opens or focuses the pop-out for one rendered diagram. */
   openDiagramPopout: (request: DiagramOpenRequest) =>
     ipcRenderer.invoke('diagram:open', request) as Promise<boolean>,
-  /** Preview only: pushes re-rendered diagrams to open pop-outs and closes stale ones. */
+  /** Markdown previews (popup or inline): pushes re-rendered diagrams to open pop-outs and closes stale ones. */
   syncDiagramPopouts: (request: DiagramSyncRequest) =>
     ipcRenderer.invoke('diagram:sync', request) as Promise<void>,
-  /** Preview only: diagrams that currently have a pop-out open. */
+  /** Markdown previews (popup or inline): diagrams that currently have a pop-out open. */
   getOpenDiagramPopouts: () => ipcRenderer.invoke('diagram:getOpenPopouts') as Promise<DiagramRef[]>,
-  /** Preview only: notified when its set of open diagram pop-outs changes. Returns an unsubscribe function. */
+  /** Markdown previews (popup or inline): notified when its set of open diagram pop-outs changes. Returns an unsubscribe function. */
   onDiagramPopoutsChanged: (callback: (refs: DiagramRef[]) => void) => {
     const listener = (_: unknown, refs: DiagramRef[]) => callback(refs);
     ipcRenderer.on('diagram:popoutsChanged', listener);

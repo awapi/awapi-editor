@@ -312,13 +312,13 @@ declare global {
       openPreviewLinkInEditor: (filePath: string) => Promise<boolean>;
       onMarkdownPreviewVisibilityChanged: (callback: (openTabIds: string[]) => void) => void;
 
-      /** Preview only: opens or focuses the pop-out window for one rendered Mermaid diagram. */
+      /** Markdown previews (popup or inline): opens or focuses the pop-out window for one rendered Mermaid diagram. */
       openDiagramPopout: (request: DiagramOpenRequest) => Promise<boolean>;
-      /** Preview only: pushes re-rendered diagrams to open pop-outs and closes ones whose diagram is gone. */
+      /** Markdown previews (popup or inline): pushes re-rendered diagrams to open pop-outs and closes ones whose diagram is gone. */
       syncDiagramPopouts: (request: DiagramSyncRequest) => Promise<void>;
-      /** Preview only: diagrams that currently have a pop-out open. */
+      /** Markdown previews (popup or inline): diagrams that currently have a pop-out open. */
       getOpenDiagramPopouts: () => Promise<DiagramRef[]>;
-      /** Preview only: notified when its open diagram pop-outs change. Returns an unsubscribe function. */
+      /** Markdown previews (popup or inline): notified when its open diagram pop-outs change. Returns an unsubscribe function. */
       onDiagramPopoutsChanged: (callback: (refs: DiagramRef[]) => void) => () => void;
       /** Diagram pop-out only: fetches the diagram to display. */
       getDiagramPopoutData: () => Promise<DiagramWindowData | null>;

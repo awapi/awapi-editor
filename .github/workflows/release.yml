@@ -10,7 +10,9 @@ jobs:
   release:
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
+        # Linux is pinned to Ubuntu 22.04 so node-pty links against glibc 2.35, the
+        # oldest supported distro (see scripts/check-pty-glibc.sh). Image retires 2027-04-17.
+        os: [macos-latest, ubuntu-22.04, windows-latest]
     
     runs-on: ${{ matrix.os }}
     

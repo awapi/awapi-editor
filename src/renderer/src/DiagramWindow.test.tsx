@@ -30,7 +30,8 @@ describe('DiagramWindow', () => {
   it('shows the received SVG as an image and applies live updates', async () => {
     render(<DiagramWindow />);
     await waitFor(() => expect(screen.getByTestId('diagram-title').textContent).toBe('Diagram 1 — README.md'));
-    expect(document.title).toBe('Diagram 1 — README.md');
+    // document.title is set in a passive effect that can flush after the title text renders.
+    await waitFor(() => expect(document.title).toBe('Diagram 1 — README.md'));
     expect(imageSrc()).toBe(`data:image/svg+xml;charset=utf-8,${encodeURIComponent('<svg id="v1"/>')}`);
 
     act(() => pushUpdate!({ title: 'Diagram 1 — README.md', theme: 'light', svg: '<svg id="v2"/>', error: null }));

@@ -1,3 +1,4 @@
+import { usePreviewScrollRestore } from './usePreviewScrollRestore';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from './theme/ThemeContext';
 import {
@@ -65,12 +66,15 @@ export interface MarkdownPreviewWindowProps {
   payload?: MarkdownPreviewPayload;
   /** Embedded only: opens the find bar each time this number changes (e.g. from the Find menu). */
   findRequest?: number;
+  /** Embedded only: identifies the tab so its scroll position is restored when re-activated. */
+  scrollKey?: string;
 }
 
 const MarkdownPreviewWindow: React.FC<MarkdownPreviewWindowProps> = ({
   embedded = false,
   payload: embeddedPayload,
   findRequest,
+  scrollKey,
 }) => {
   const { currentTheme, colors } = useTheme();
   const [ipcPayload, setLivePayload] = useState<MarkdownPreviewPayload>({
@@ -101,6 +105,7 @@ const MarkdownPreviewWindow: React.FC<MarkdownPreviewWindowProps> = ({
     ? { ...topEntry, theme: livePayload.theme }
     : livePayload;
   const isNavigated = topEntry !== null;
+  usePreviewScrollRestore(embedded ? scrollKey : undefined, bodyRef, !isNavigated);
 
   useEffect(() => {
     if (embedded) return;

@@ -35,6 +35,7 @@ import { useTerminalSessions } from './useTerminalSessions';
 import { isNewTerminalShortcut, isToggleTerminalShortcut } from './terminalKeys';
 import FileExplorer, { getParentDirPath, normalizePathForCompare } from './FileExplorer';
 import MarkdownPreviewWindow from './MarkdownPreviewWindow';
+import { clearPreviewScroll } from './usePreviewScrollRestore';
 
 /** True when this window was opened via "Pop out to new window" (single-file view). */
 const isPopoutMode = typeof window !== 'undefined' && window.location.hash === '#popout';
@@ -1290,6 +1291,7 @@ const App: React.FC = () => {
 
     pushClosedTabs(closedSnapshots);
 
+    closedIds.forEach(clearPreviewScroll);
     const remaining = tabsRef.current.filter(t => !closedIds.includes(t.id));
     setTabs(remaining);
 
@@ -2568,6 +2570,7 @@ const App: React.FC = () => {
           ) : isActiveTabPreviewOnly ? (
             <MarkdownPreviewWindow
               key={activeTab.id}
+              scrollKey={activeTab.id}
               embedded
               payload={buildMarkdownPreviewPayload(activeTab)}
               findRequest={previewFindRequest}
